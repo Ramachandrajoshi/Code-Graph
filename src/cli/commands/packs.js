@@ -109,6 +109,15 @@ function scaffold(config, args) {
 
   fs.mkdirSync(path.join(dir, 'queries'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'index.js'), packTemplate(id, grammar, known));
+
+  // Packs are ES modules. Without this marker Node re-parses index.js as
+  // CommonJS, fails, retries as ESM, and prints a MODULE_TYPELESS_PACKAGE_JSON
+  // warning every time the pack loads — noise the author did not cause and
+  // cannot easily explain.
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: `cgraph-pack-${id}`, version: '0.1.0', type: 'module', private: true }, null, 2) + '\n'
+  );
   fs.writeFileSync(path.join(dir, 'queries', 'tags.scm'), tagsTemplate(id));
   fs.writeFileSync(path.join(dir, 'queries', 'imports.scm'), importsTemplate(id));
 

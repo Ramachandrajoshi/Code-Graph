@@ -292,6 +292,13 @@ test('a pack authored outside the repo is discovered and used', opts, async () =
     const packDir = path.join(fx.root, '.cgraph', 'packs', 'toml');
     fs.mkdirSync(path.join(packDir, 'queries'), { recursive: true });
 
+    // Matches what `cgraph packs scaffold` writes: without the ESM marker Node
+    // warns on every load.
+    fs.writeFileSync(
+      path.join(packDir, 'package.json'),
+      JSON.stringify({ name: 'cgraph-pack-toml', version: '0.1.0', type: 'module', private: true })
+    );
+
     fs.writeFileSync(
       path.join(packDir, 'queries', 'tags.scm'),
       '(table (bare_key) @name) @definition.class\n(pair (bare_key) @name) @definition.field\n'
@@ -338,6 +345,12 @@ test('a broken third-party pack does not stop indexing', opts, async () => {
     const packDir = path.join(fx.root, '.cgraph', 'packs', 'broken');
     fs.mkdirSync(packDir, { recursive: true });
     fs.writeFileSync(path.join(packDir, 'index.js'), 'export default { /* no id */ };\n');
+    // Well-formed as a module; the fault under test is the missing `id`, and a
+    // module-type warning would obscure that.
+    fs.writeFileSync(
+      path.join(packDir, 'package.json'),
+      JSON.stringify({ name: 'cgraph-pack-broken', version: '0.1.0', type: 'module', private: true })
+    );
 
     const { PackRegistry } = await import('../src/packs/registry.js');
     const { DEFAULTS } = await import('../src/core/config.js');

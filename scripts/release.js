@@ -52,7 +52,12 @@ if (!/^[0-9A-Za-z.-]+$/.test(preid)) {
 }
 
 function run(cmd, args, opts = {}) {
-  return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', ...opts }).trim();
+  const out = execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', ...opts });
+  // execFileSync returns null when stdio is 'inherit' — output went straight to
+  // the terminal, so there is nothing to capture. Calling .trim() on that threw
+  // a TypeError which the caller's catch reported as "tests failed", after 240
+  // tests had just passed on screen.
+  return typeof out === 'string' ? out.trim() : '';
 }
 
 /**
@@ -180,8 +185,15 @@ if (published === true) {
 process.stdout.write('\n  Verification\n');
 try {
   runNpm(['test'], { stdio: 'inherit' });
-} catch {
-  fail('tests failed.', 'A release must be green.');
+} catch (err) {
+  // Distinguish "the tests reported failure" from "this script broke trying to
+  // run them". Collapsing the two sent the maintainer hunting through a green
+  // test log for a failure that did not exist.
+  if (typeof err.status === 'number' && err.status !== 0) {
+    fail('tests failed.', 'A release must be green.');
+  }
+  fail(`could not run the test suite: ${err.message}`,
+       'This is a fault in the release script, not in the tests.');
 }
 step('tests pass');
 

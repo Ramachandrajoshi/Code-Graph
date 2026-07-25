@@ -83,6 +83,7 @@ async function buildReport(store, config) {
   return {
     root: config.root,
     stats,
+    fts5: store.hasFts5,
     languages: byLang.map((l) => ({
       ...l,
       exact: resByLang.get(l.lang)?.exact ?? 0,
@@ -149,6 +150,17 @@ function render(r) {
 
   if (r.grammars.broken.length) {
     out(color.dim(`  grammars unusable with the pinned runtime: ${r.grammars.broken.join(', ')}`));
+  }
+
+  // Degraded search is a real capability difference, and staying quiet about it
+  // would leave a user puzzled by weaker results with no way to find out why.
+  if (!r.fts5) {
+    out('');
+    out(color.yellow('  full-text search is degraded: this Node build has no SQLite FTS5'));
+    out(color.dim('  name, signature and doc search still work via substring matching,'));
+    out(color.dim('  but without relevance ranking. FTS5 is a compile-time option and is'));
+    out(color.dim('  absent from many Node builds; a build that has it is picked up'));
+    out(color.dim('  automatically on the next run, with no re-index needed.'));
   }
 
   // -- skipped files

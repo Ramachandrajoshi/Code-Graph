@@ -49,7 +49,9 @@ export function search(store, query, opts = {}) {
 
   for (const row of exactMatches(store, q)) add(row, 100, 'exact');
   for (const row of prefixMatches(store, q)) add(row, 40, 'prefix');
-  for (const row of ftsMatches(store, q)) add(row, 25, 'text');
+  // FTS5 is unavailable in many Node builds, so the text strategy has two
+  // implementations and the caller cannot tell which ran.
+  for (const row of textMatches(store, q)) add(row, 25, 'text');
   for (const row of trigramMatches(store, q)) add(row, 10, 'fuzzy');
 
   const filtered = [...scores.values()].filter(({ node }) => {
@@ -90,6 +92,54 @@ function prefixMatches(store, q) {
     baseSelect(`WHERE n.name LIKE ? AND n.name != ? AND n.kind != 'module'
                 ORDER BY n.rank DESC LIMIT 50`),
     `${q}%`, q
+  );
+}
+
+/**
+ * Text search across names, split identifier words, signatures and docs.
+ *
+ * Uses FTS5 when the running Node binary has it, and a LIKE scan when it does
+ * not. Node's bundled SQLite omits FTS5 in many builds, so this is a routine
+ * runtime condition rather than an edge case, and doc/signature search has to
+ * keep working either way.
+ */
+function textMatches(store, q) {
+  return store.hasFts5 ? ftsMatches(store, q) : likeMatches(store, q);
+}
+
+/**
+ * Fallback for builds without FTS5.
+ *
+ * Scans `nodes` directly. Slower than an inverted index and without relevance
+ * ranking, but correct — and the surrounding scorer supplies ordering. Split
+ * identifier words are matched too, so "login" still finds "handleLogin",
+ * which is the behaviour users would most notice losing.
+ */
+function likeMatches(store, q) {
+  const terms = [...new Set([...q.split(/\s+/), ...splitIdentifier(q)])]
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+
+  if (!terms.length) return [];
+
+  // One OR group per term across name, qname, signature and doc.
+  const clauses = [];
+  const params = [];
+  for (const term of terms) {
+    const like = `%${term.replace(/[%_]/g, (c) => `\\${c}`)}%`;
+    clauses.push(`(n.name LIKE ? ESCAPE '\\' OR n.qname LIKE ? ESCAPE '\\'
+                   OR n.signature LIKE ? ESCAPE '\\' OR n.doc LIKE ? ESCAPE '\\')`);
+    params.push(like, like, like, like);
+  }
+
+  return store.all(
+    `SELECT n.id, n.name, n.qname, n.kind, n.signature, n.doc, n.start_line,
+            n.end_line, n.rank, n.is_exported, f.path, f.lang
+       FROM nodes n JOIN files f ON f.id = n.file_id
+      WHERE n.kind != 'module' AND (${clauses.join(' OR ')})
+      ORDER BY n.rank DESC
+      LIMIT 60`,
+    ...params
   );
 }
 

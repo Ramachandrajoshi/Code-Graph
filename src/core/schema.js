@@ -143,26 +143,16 @@ CREATE INDEX idx_unresolved_file ON unresolved(file_id);
 --------------------------------------------------------------------------------
 -- Search indexes
 --------------------------------------------------------------------------------
--- The parts column holds the identifier split on camelCase and snake_case
--- boundaries ('handleLogin' -> 'handle login'). Without it, FTS5 treats an identifier as a
--- single token and a search for 'login' cannot find 'handleLogin' — which is the
--- single most common way a developer searches code.
+-- NOTE: the FTS5 tables (symbols_fts, fts_map) are deliberately NOT created
+-- here. FTS5 is a compile-time option in SQLite, and Node's bundled build does
+-- not consistently include it — Node 22.14 and 23.11 ship without it while some
+-- 24.x builds have it. Availability therefore depends on the specific binary,
+-- not on the version, so it cannot be guaranteed by an engines range.
 --
--- contentless_delete=1 (SQLite >= 3.43) is what makes DELETE legal here; a plain
--- contentless table cannot be updated, and incremental re-indexing depends on it.
-CREATE VIRTUAL TABLE symbols_fts USING fts5(
-  name, parts, qname, signature, doc,
-  content='',                          -- contentless: we store ids, not copies
-  contentless_delete=1,
-  tokenize='unicode61 remove_diacritics 2'
-);
-
--- Maps FTS rowids back to node ids. Contentless FTS5 can't do that itself.
-CREATE TABLE fts_map (
-  rowid   INTEGER PRIMARY KEY,
-  node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE
-);
-CREATE INDEX idx_fts_map_node ON fts_map(node_id);
+-- Store.ensureSearchIndex() probes for FTS5 at open time and creates those
+-- tables only when the running binary supports it. Putting them in a migration
+-- makes the migration fail outright with "no such module: fts5", which takes
+-- the entire tool down on an otherwise perfectly capable Node.
 
 -- Identifier trigrams, for substring matches FTS5 word tokenization can't do
 -- (finding 'ogin' inside 'handleLogin').

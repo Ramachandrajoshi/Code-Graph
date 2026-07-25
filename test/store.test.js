@@ -82,9 +82,14 @@ test('clearFileData removes nodes, edges, imports and search rows', async () => 
   assert.equal(after.edges, 0, 'edges cleared');
   assert.equal(after.unresolved, 0, 'unresolved cleared');
   assert.equal(store.get('SELECT COUNT(*) n FROM imports').n, 0, 'imports cleared');
-  assert.equal(store.get('SELECT COUNT(*) n FROM fts_map').n, 0, 'fts map cleared');
   assert.equal(store.get('SELECT COUNT(*) n FROM trigrams').n, 0, 'trigrams cleared');
-  assert.equal(store.get('SELECT COUNT(*) n FROM symbols_fts').n, 0, 'fts index cleared');
+
+  // The FTS tables only exist on a build whose SQLite was compiled with FTS5.
+  if (store.hasFts5) {
+    assert.equal(store.get('SELECT COUNT(*) n FROM fts_map').n, 0, 'fts map cleared');
+    assert.equal(store.get('SELECT COUNT(*) n FROM symbols_fts').n, 0, 'fts index cleared');
+  }
+
   assert.equal(after.files, 1, 'the file row itself survives');
 
   store.close();
@@ -156,6 +161,14 @@ test('insertNode makes a symbol findable by its camelCase component words', asyn
     signature: 'handleLogin(email: string)', doc: 'Authenticates a user.',
   });
 
+  // This exercises the FTS5 index directly, so it can only run where FTS5
+  // exists. The equivalent behaviour on builds without it is covered by the
+  // 'without FTS5' tests in search.test.js, which go through search() instead.
+  if (!store.hasFts5) {
+    store.close();
+    return;
+  }
+
   // The whole point of the `parts` column: a developer searching 'login' must
   // find 'handleLogin', which plain FTS5 word tokenization cannot do.
   const byWord = store.get(
@@ -176,6 +189,52 @@ test('insertNode makes a symbol findable by its camelCase component words', asyn
   );
   assert.equal(byDoc?.node_id, nodeId, 'doc comments are searchable');
 
+  store.close();
+});
+
+test('opens and indexes on a build without FTS5', async () => {
+  // FTS5 is a SQLite compile-time option and Node's bundled build often omits
+  // it (22.14 and 23.11 both do). Requiring it made migration fail outright
+  // with "no such module: fts5", taking the whole tool down on a perfectly
+  // capable Node. It must be detected, never assumed.
+  const store = await Store.memory({ forceNoFts: true });
+  assert.equal(store.hasFts5, false);
+  assert.equal(store.getMeta('fts5'), '0');
+
+  const fileId = store.upsertFile({
+    path: 'src/a.js', lang: 'javascript', pack: 'javascript',
+    hash: 'h', mtime: 1, size: 1, loc: 1, tok: 1, parsed: 1,
+  });
+
+  assert.doesNotThrow(() => {
+    store.insertNode({
+      fileId, kind: 'function', name: 'handleLogin', qname: 'src/a.js::handleLogin',
+      startLine: 1, endLine: 5, startByte: 0, endByte: 50,
+      signature: 'handleLogin(email)', doc: 'Authenticates a user.',
+    });
+  }, 'indexing must work without FTS5');
+
+  assert.equal(store.stats().nodes, 1);
+  // Trigrams are the always-available half of search and must still be written.
+  assert.ok(store.get('SELECT node_id FROM trigrams WHERE tri = ?', 'ogi'));
+
+  store.close();
+});
+
+test('clearFileData works without FTS5', async () => {
+  const store = await Store.memory({ forceNoFts: true });
+  const fileId = store.upsertFile({
+    path: 'src/a.js', lang: 'javascript', pack: 'javascript',
+    hash: 'h', mtime: 1, size: 1, loc: 1, tok: 1, parsed: 1,
+  });
+  store.insertNode({
+    fileId, kind: 'function', name: 'foo', qname: 'q',
+    startLine: 1, endLine: 2, startByte: 0, endByte: 5,
+  });
+
+  // Deleting FTS rows that were never created must not throw on re-index.
+  assert.doesNotThrow(() => store.clearFileData(fileId));
+  assert.equal(store.stats().nodes, 0);
   store.close();
 });
 

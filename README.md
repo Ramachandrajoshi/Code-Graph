@@ -232,6 +232,12 @@ Invalidation is content-hash based, so `touch` correctly changes nothing.
   where the types match your installed version exactly; the registry is a
   fallback. The cache is keyed on content, so `npm link` and `patch-package`
   don't serve stale docs.
+- **Full-text search is optional.** SQLite's FTS5 is a compile-time option and
+  Node's bundled build often omits it (22.14 and 23.11 both do), so it is
+  detected at runtime rather than required. Without it, name, signature and doc
+  search still work through substring matching — you lose relevance ranking, not
+  the capability. `cgraph doctor` tells you which mode you're in, and a Node
+  build that has FTS5 is picked up automatically with no re-index.
 
 ## Programmatic API
 

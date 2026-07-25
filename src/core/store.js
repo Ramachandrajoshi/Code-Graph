@@ -58,15 +58,21 @@ export class Store {
     const store = new Store(db, file);
     store._configure();
     store.migrate();
+    store.ensureSearchIndex();
     return store;
   }
 
-  /** In-memory store, for tests. */
-  static async memory() {
+  /**
+   * In-memory store, for tests.
+   * `forceNoFts` simulates a Node built without FTS5, which is the majority of
+   * builds — the degraded path needs testing on machines that do have it.
+   */
+  static async memory({ forceNoFts = false } = {}) {
     const db = await openDatabase(':memory:');
     const store = new Store(db, ':memory:');
     store._configure();
     store.migrate();
+    store.ensureSearchIndex({ forceNoFts });
     return store;
   }
 
@@ -163,6 +169,76 @@ export class Store {
     }
   }
 
+  // -- optional full-text search ---------------------------------------------
+
+  /**
+   * Create the FTS5 tables if this Node binary supports them.
+   *
+   * FTS5 is a SQLite compile-time option and Node's bundled build is
+   * inconsistent about including it: 22.14 and 23.11 ship without it, some 24.x
+   * builds have it. It therefore cannot be required, only detected — and when
+   * absent, search degrades to exact/prefix/trigram/LIKE rather than the tool
+   * refusing to start.
+   *
+   * Called on every open, so a user who upgrades to a Node that has FTS5 gains
+   * it automatically, with a backfill so existing symbols become searchable.
+   */
+  ensureSearchIndex({ forceNoFts = false } = {}) {
+    this.hasFts5 = forceNoFts ? false : this._probeFts5();
+
+    if (!this.hasFts5) {
+      this.setMeta('fts5', '0');
+      return false;
+    }
+
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
+        name, parts, qname, signature, doc,
+        content='',
+        contentless_delete=1,
+        tokenize='unicode61 remove_diacritics 2'
+      );
+      CREATE TABLE IF NOT EXISTS fts_map (
+        rowid   INTEGER PRIMARY KEY,
+        node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_fts_map_node ON fts_map(node_id);
+    `);
+    this.setMeta('fts5', '1');
+
+    // An index built on a binary without FTS5 has nodes but no FTS rows. On the
+    // first open with FTS5 available, backfill rather than silently returning
+    // worse results than the machine is capable of.
+    const nodes = this.get("SELECT COUNT(*) n FROM nodes WHERE kind != 'module'")?.n ?? 0;
+    const indexed = this.get('SELECT COUNT(*) n FROM fts_map')?.n ?? 0;
+    if (nodes > 0 && indexed === 0) this._backfillFts();
+
+    return true;
+  }
+
+  _probeFts5() {
+    try {
+      this.db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS _cgraph_fts_probe USING fts5(x)');
+      this.db.exec('DROP TABLE IF EXISTS _cgraph_fts_probe');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  _backfillFts() {
+    const rows = this.all(
+      `SELECT id, name, qname, signature, doc FROM nodes WHERE kind != 'module'`
+    );
+    this.transaction(() => {
+      for (const n of rows) {
+        this.indexNodeForSearch(n.id, {
+          name: n.name, qname: n.qname, signature: n.signature, doc: n.doc,
+        });
+      }
+    });
+  }
+
   // -- meta / counters -------------------------------------------------------
 
   getMeta(key) {
@@ -236,15 +312,17 @@ export class Store {
   clearFileData(fileId) {
     // FTS and trigram rows hang off nodes; clear them before the cascade so the
     // contentless FTS index doesn't retain stale entries.
-    this.run(
-      `DELETE FROM symbols_fts WHERE rowid IN
-         (SELECT rowid FROM fts_map WHERE node_id IN (SELECT id FROM nodes WHERE file_id = ?))`,
-      fileId
-    );
-    this.run(
-      'DELETE FROM fts_map WHERE node_id IN (SELECT id FROM nodes WHERE file_id = ?)',
-      fileId
-    );
+    if (this.hasFts5) {
+      this.run(
+        `DELETE FROM symbols_fts WHERE rowid IN
+           (SELECT rowid FROM fts_map WHERE node_id IN (SELECT id FROM nodes WHERE file_id = ?))`,
+        fileId
+      );
+      this.run(
+        'DELETE FROM fts_map WHERE node_id IN (SELECT id FROM nodes WHERE file_id = ?)',
+        fileId
+      );
+    }
     this.run(
       'DELETE FROM trigrams WHERE node_id IN (SELECT id FROM nodes WHERE file_id = ?)',
       fileId
@@ -295,15 +373,20 @@ export class Store {
   }
 
   indexNodeForSearch(nodeId, n) {
+    // Trigrams are always available; FTS5 may not be. Ordering matters: the
+    // trigram index is what keeps substring search working on a Node built
+    // without FTS5.
+    const insertTri = this.stmt('INSERT INTO trigrams(tri, node_id) VALUES(?, ?)');
+    for (const tri of trigrams(n.name)) insertTri.run(tri, nodeId);
+
+    if (!this.hasFts5) return;
+
     this.run(
       `INSERT INTO symbols_fts(name, parts, qname, signature, doc) VALUES(?, ?, ?, ?, ?)`,
       n.name, identifierParts(n.name), n.qname, n.signature ?? '', n.doc ?? ''
     );
     const rowid = this.get('SELECT last_insert_rowid() AS id').id;
     this.run('INSERT INTO fts_map(rowid, node_id) VALUES(?, ?)', rowid, nodeId);
-
-    const insertTri = this.stmt('INSERT INTO trigrams(tri, node_id) VALUES(?, ?)');
-    for (const tri of trigrams(n.name)) insertTri.run(tri, nodeId);
   }
 
   // -- stats -----------------------------------------------------------------

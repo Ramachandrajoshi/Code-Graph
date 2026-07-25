@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Indexing no longer fails on Node builds without SQLite FTS5.** FTS5 is a
+  compile-time option and Node's bundled SQLite omits it in many builds
+  (22.14 and 23.11 among them), so creating the full-text tables in a migration
+  aborted startup entirely with `no such module: fts5`. Availability is now
+  probed at runtime: with FTS5 the index uses it, without it search falls back
+  to exact, prefix, trigram and substring matching over names, signatures and
+  docs. `cgraph doctor` reports which mode is active, and a later upgrade to a
+  Node that has FTS5 is picked up automatically and backfilled — no re-index.
+
 ## [0.1.0] — 2026-07-25
 
 Initial release.

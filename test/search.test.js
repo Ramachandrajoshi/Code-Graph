@@ -132,6 +132,99 @@ test('limit is respected', opts, async () => {
   } finally { fx.cleanup(); }
 });
 
+// ------------------------------------------------- search without FTS5
+
+/**
+ * Node's bundled SQLite omits FTS5 in many builds, so the degraded path is the
+ * one a large share of users actually run. These tests force it off so it gets
+ * exercised even on a machine that has FTS5.
+ */
+async function noFtsStore() {
+  const { Store } = await import('../src/core/store.js');
+  const store = await Store.memory({ forceNoFts: true });
+  const fileId = store.upsertFile({
+    path: 'src/auth.js', lang: 'javascript', pack: 'javascript',
+    hash: 'h', mtime: 1, size: 1, loc: 20, tok: 100, parsed: 1,
+  });
+  store.insertNode({
+    fileId, kind: 'function', name: 'handleLogin', qname: 'src/auth.js::handleLogin',
+    startLine: 1, endLine: 8, startByte: 0, endByte: 120,
+    signature: 'handleLogin(email, pw)', doc: 'Authenticates a user against the credential store.',
+  });
+  store.insertNode({
+    fileId, kind: 'function', name: 'saveRecord', qname: 'src/auth.js::saveRecord',
+    startLine: 10, endLine: 14, startByte: 130, endByte: 200,
+    signature: 'saveRecord(r)', doc: 'Persists a record.',
+  });
+  return store;
+}
+
+test('finds a camelCase component word without FTS5', async () => {
+  const store = await noFtsStore();
+  try {
+    const names = search(store, 'login').map((h) => h.node.name);
+    assert.ok(names.includes('handleLogin'), `expected handleLogin, got ${names}`);
+  } finally { store.close(); }
+});
+
+test('searches doc text without FTS5', async () => {
+  const store = await noFtsStore();
+  try {
+    // The capability most obviously lost if the fallback only covered names.
+    const names = search(store, 'credential').map((h) => h.node.name);
+    assert.ok(names.includes('handleLogin'), `expected handleLogin, got ${names}`);
+  } finally { store.close(); }
+});
+
+test('searches signatures without FTS5', async () => {
+  const store = await noFtsStore();
+  try {
+    const names = search(store, 'pw').map((h) => h.node.name);
+    assert.ok(names.includes('handleLogin'));
+  } finally { store.close(); }
+});
+
+test('exact match still ranks first without FTS5', async () => {
+  const store = await noFtsStore();
+  try {
+    assert.equal(search(store, 'saveRecord')[0].node.name, 'saveRecord');
+  } finally { store.close(); }
+});
+
+test('LIKE wildcards in a query are escaped, not interpreted', async () => {
+  // Without escaping, a query of '%' matches every symbol and the user gets a
+  // dump of the entire repository instead of a search result.
+  const store = await noFtsStore();
+  try {
+    assert.doesNotThrow(() => search(store, '%'));
+    assert.doesNotThrow(() => search(store, '_'));
+    const all = search(store, '%').map((h) => h.node.name);
+    assert.ok(!all.includes('saveRecord'), "'%' must not behave as match-everything");
+  } finally { store.close(); }
+});
+
+test('operator characters do not throw without FTS5', async () => {
+  const store = await noFtsStore();
+  try {
+    for (const q of ['get-user', 'foo:bar', 'a"b', '((', 'NEAR(a b)']) {
+      assert.doesNotThrow(() => search(store, q), `query '${q}' should degrade, not throw`);
+    }
+  } finally { store.close(); }
+});
+
+test('FTS5 availability is recorded so doctor can report it', async () => {
+  const off = await noFtsStore();
+  try { assert.equal(off.getMeta('fts5'), '0'); } finally { off.close(); }
+
+  const { Store } = await import('../src/core/store.js');
+  const on = await Store.memory();
+  try {
+    // Whichever this build supports, the flag must reflect reality rather than
+    // an assumption.
+    assert.equal(on.getMeta('fts5'), on.hasFts5 ? '1' : '0');
+  } finally { on.close(); }
+});
+
 // ---------------------------------------------------------------- traversal
 
 test('callers finds who calls a symbol', opts, async () => {

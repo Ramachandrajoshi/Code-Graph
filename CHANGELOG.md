@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
 - **Dependency docs are fetched when not installed locally.** Every registry
   publishes the same artifact cgraph reads off disk, so it is downloaded and run
   through the same parsers: npm `.tgz` (falling back to `@types/<pkg>`, since a
@@ -21,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is what is in the source; they cannot carry setup guides, which were
   never in the source. This is the only prose source, and coverage is partial.
 - tar.gz and zip readers built on `node:zlib`, with no new dependencies.
-
 - **C# language pack.** Types, members, properties, namespaces, XML doc
   summaries and access modifiers, with `using` resolved to the file declaring
   that namespace. LINQ and BCL calls are classified as runtime built-ins rather
@@ -43,7 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returned vector width is verified against `dimensions` on the first batch,
   because a silent mismatch corrupts every similarity score in a way that is
   close to untraceable.
-
 - **The index refreshes itself.** The MCP server checks for changes before
   answering, so an agent never reads a graph that disagrees with the working
   tree — after an editor save, a git checkout, a rebase, or another agent's
@@ -61,12 +58,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **No token-savings multiplier is published any more.** The previous figures
+  compared cgraph against an invented grep-then-read baseline: an agent opens
+  every file grep matched, capped at ten, and reads each whole. No agent was
+  ever run. Change the cap, assume line windows instead of whole files, or
+  assume two probes instead of one, and the ratio moves by an order of
+  magnitude — the assumption determined the number, not the measurement.
+  Responses now report their own size, and where a concrete comparable exists
+  (the file an outline describes) both numbers are shown as facts with no
+  arithmetic between them. `bench/` remains as a regression guard on response
+  sizes, comparable only to itself.
 - **Freshness checks no longer read the repository.** A file whose size and
   mtime match the index is skipped without being opened; only files that fail
   that check are read and hashed. On llama.cpp a no-op pass drops from ~520ms
   to ~170ms, which is what makes automatic refresh affordable. The content hash
   still decides, so a file touched but not edited is read once and correctly not
   re-parsed.
+
+### Breaking
+
+- `SavingsLedger` is renamed `UsageLedger` in the programmatic API, and records
+  `tokens_returned` / `tokens_source` instead of `tokens_baseline` /
+  `tokens_saved`. The old name asserted a saving the tool cannot observe. Only
+  affects code importing it from `cgraph`; the CLI and MCP surfaces are
+  unchanged.
+- `cgraph stats` no longer prints a reduction factor, and `cgraph doctor` no
+  longer prints "tokens saved". Anything parsing that output needs updating.
 
 ## [0.1.1] — 2026-07-25
 ### Fixed

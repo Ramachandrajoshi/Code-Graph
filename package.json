@@ -37,7 +37,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "test:watch": "node --test --watch \"test/**/*.test.js\"",
     "bench": "node bench/run.js",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "release": "node scripts/release.js"
   },
   "dependencies": {
     "ignore": "^7.0.5",
@@ -76,6 +77,7 @@
     "developer-tools"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   }
 }

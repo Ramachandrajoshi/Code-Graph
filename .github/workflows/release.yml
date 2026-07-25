@@ -1,0 +1,268 @@
+name: Release
+
+# Triggered by pushing a version tag, which `npm run release` creates.
+# The tag is the single source of truth for what gets published: everything
+# below is derived from it, so there is no way to publish a version that was
+# never tagged, or tag a version that was never published.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Refuse to publish anything that cannot be justified. Every check here has
+  # been a real incident in some project: a tag that disagrees with
+  # package.json, a version already on the registry, a broken tarball.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      npm_tag: ${{ steps.version.outputs.npm_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history, so release notes can diff against the previous tag
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Tag must match package.json
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $TAG declares $TAG_VERSION but package.json says $PKG_VERSION."
+            echo "::error::Use 'npm run release' which keeps them in step, or fix one of them."
+            exit 1
+          fi
+
+          # A version with a hyphen is a prerelease (1.0.0-beta.1) and must NOT
+          # become the 'latest' dist-tag, or every `npm i code-graph` gets a beta.
+          if [[ "$TAG_VERSION" == *-* ]]; then
+            CHANNEL="${TAG_VERSION#*-}"     # beta.1
+            CHANNEL="${CHANNEL%%.*}"        # beta
+            echo "prerelease=true"      >> "$GITHUB_OUTPUT"
+            echo "npm_tag=$CHANNEL"     >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false"     >> "$GITHUB_OUTPUT"
+            echo "npm_tag=latest"       >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$TAG_VERSION"   >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"               >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG_VERSION"
+
+      - name: Version must not already exist on npm
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # `npm view` exits non-zero for a package that has never been
+          # published, which is the expected state for a first release.
+          if npm view "code-graph@$VERSION" version --json >/dev/null 2>&1; then
+            echo "::error::code-graph@$VERSION is already published. Versions on npm are immutable."
+            echo "::error::Bump to a new version rather than retagging."
+            exit 1
+          fi
+          echo "Version $VERSION is available."
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Benchmark
+        # The token-reduction claim is the product. A release that silently
+        # regressed it should not ship quietly.
+        run: npm run bench
+
+      - name: Verify tarball contents
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const files = require('./pack.json')[0].files.map(f => f.path);
+            const required = [
+              'bin/cgraph.js', 'src/index.js', 'src/sdk/index.js',
+              'src/core/grammar-manifest.json', 'LICENSE', 'NOTICE', 'README.md',
+              'src/packs/typescript/queries/tags.scm',
+              'src/packs/javascript/queries/tags.scm',
+              'src/packs/python/queries/tags.scm',
+              'src/packs/go/queries/tags.scm',
+              'src/packs/rust/queries/tags.scm',
+              'src/packs/java/queries/tags.scm',
+            ];
+            const missing = required.filter(r => !files.includes(r));
+            if (missing.length) {
+              console.error('::error::Missing from tarball: ' + missing.join(', '));
+              process.exit(1);
+            }
+            // A tarball carrying tests or the index means a files[] mistake.
+            const leaked = files.filter(f => /^(test|bench)\//.test(f) || f.includes('.codegraph'));
+            if (leaked.length) {
+              console.error('::error::Should not be published: ' + leaked.join(', '));
+              process.exit(1);
+            }
+            console.log('Tarball OK: ' + files.length + ' files.');
+          "
+
+      - name: Smoke test the packed tarball
+        # Catches the class of bug where the repo works but the *published*
+        # package does not: a missing file, a bad bin path, a broken export map.
+        run: |
+          npm pack
+          mkdir -p /tmp/smoke && cd /tmp/smoke
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/code-graph-*.tgz
+          mkdir -p src
+          printf 'export function findUser(id) { return id; }\n' > src/db.js
+          printf "import { findUser } from './db';\nexport function handleLogin(e) { return findUser(e); }\n" > src/app.js
+          npx cgraph --version
+          npx cgraph index --quiet
+          npx cgraph find findUser | tee out.txt
+          grep -q "findUser" out.txt || { echo "::error::Installed package cannot find a symbol"; exit 1; }
+          npx cgraph graph findUser | grep -q "handleLogin" || { echo "::error::Installed package cannot traverse the graph"; exit 1; }
+          echo "Installed package works."
+
+  # ---------------------------------------------------------------------------
+  # Publish. Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN anywhere.
+  # The trust relationship is configured once at
+  # npmjs.com/package/code-graph/access and is bound to THIS workflow file,
+  # so a workflow added by an attacker cannot publish.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/code-graph
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC; without it npm falls back to token auth
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Use an npm that understands trusted publishing
+        # Trusted publishing needs npm >= 11.5.1. Node 24 ships a new enough npm
+        # today, but pinning the requirement here means a future runner image
+        # cannot silently downgrade us into token-based auth.
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install
+        run: npm ci
+
+      - name: Publish
+        # --provenance is explicit rather than relying on the documented
+        # automatic behaviour, which does not always trigger in practice.
+        run: npm publish --provenance --tag ${{ needs.verify.outputs.npm_tag }}
+
+  # ---------------------------------------------------------------------------
+  # Record the release on GitHub, so the release track lives alongside the code.
+  # Runs after publish so a release is never announced for a version that
+  # failed to reach the registry.
+  # ---------------------------------------------------------------------------
+  github-release:
+    name: Create GitHub Release
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create the release
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build release notes
+        id: notes
+        run: |
+          VERSION="${{ needs.verify.outputs.version }}"
+          NOTES_FILE=notes.md
+
+          # Prefer the hand-written CHANGELOG section: it explains why a change
+          # matters, which a commit list cannot.
+          node -e "
+            const fs = require('fs');
+            const version = process.env.VERSION;
+            let body = '';
+            try {
+              const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+              const re = new RegExp('^## \\\\[' + version.replace(/\\./g, '\\\\.') + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=^## |\\\\Z)', 'm');
+              const m = changelog.match(re);
+              if (m) body = m[1].trim();
+            } catch {}
+            fs.writeFileSync(process.env.NOTES_FILE, body);
+          "
+          env_ok=$?
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "No CHANGELOG section for $VERSION; falling back to commit log."
+            PREV_TAG="$(git describe --tags --abbrev=0 "${{ needs.verify.outputs.tag }}^" 2>/dev/null || true)"
+            if [ -n "$PREV_TAG" ]; then
+              git log --pretty=format:'- %s (%h)' "$PREV_TAG..${{ needs.verify.outputs.tag }}" > "$NOTES_FILE"
+            else
+              echo "- Initial release" > "$NOTES_FILE"
+            fi
+          fi
+
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Install"
+            echo ""
+            echo '```bash'
+            if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then
+              echo "npm install -g code-graph@${{ needs.verify.outputs.npm_tag }}"
+            else
+              echo "npm install -g code-graph"
+            fi
+            echo '```'
+            echo ""
+            echo "Published to npm as [code-graph@$VERSION](https://www.npmjs.com/package/code-graph/v/$VERSION) with [build provenance](https://docs.npmjs.com/generating-provenance-statements)."
+          } >> "$NOTES_FILE"
+
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          NOTES_FILE: notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ needs.verify.outputs.tag }}" \
+            --title "v${{ needs.verify.outputs.version }}" \
+            --notes-file "${{ steps.notes.outputs.notes_file }}" \
+            ${{ needs.verify.outputs.prerelease == 'true' && '--prerelease' || '--latest' }} \
+            code-graph-*.tgz 2>/dev/null || \
+          gh release create "${{ needs.verify.outputs.tag }}" \
+            --title "v${{ needs.verify.outputs.version }}" \
+            --notes-file "${{ steps.notes.outputs.notes_file }}" \
+            ${{ needs.verify.outputs.prerelease == 'true' && '--prerelease' || '--latest' }}

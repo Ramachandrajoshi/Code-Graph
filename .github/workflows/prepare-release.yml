@@ -1,0 +1,144 @@
+name: Prepare release
+
+# Opens a release PR from a `release/vX.Y.Z` branch: bumps the version, moves
+# the Unreleased CHANGELOG section under the new heading, and stops.
+#
+# Nothing is published here. Merging the PR is the human decision point; the
+# tag pushed afterwards is what triggers release.yml. Splitting it this way
+# means the version bump gets reviewed like any other change, and a mistake is
+# a closed PR rather than an immutable bad version on the registry.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump'
+        required: true
+        type: choice
+        default: patch
+        options: [patch, minor, major, prepatch, preminor, premajor, prerelease]
+      preid:
+        description: 'Prerelease identifier (only for pre* bumps)'
+        required: false
+        type: string
+        default: beta
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    name: Open release PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test before proposing a release
+        run: npm test
+
+      - name: Bump version
+        id: bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # --no-git-tag-version: the tag is created after review, not now.
+          # Tagging here would publish whatever is on the branch, unreviewed.
+          if [[ "${{ inputs.bump }}" == pre* ]]; then
+            npm version "${{ inputs.bump }}" --preid "${{ inputs.preid }}" --no-git-tag-version
+          else
+            npm version "${{ inputs.bump }}" --no-git-tag-version
+          fi
+
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION"           >> "$GITHUB_OUTPUT"
+          echo "branch=release/v$VERSION"   >> "$GITHUB_OUTPUT"
+
+      - name: Move Unreleased notes under the new version
+        run: |
+          node -e "
+            const fs = require('fs');
+            const version = process.env.VERSION;
+            const today = new Date().toISOString().slice(0, 10);
+            const file = 'CHANGELOG.md';
+            let text = fs.readFileSync(file, 'utf8');
+
+            // Everything accumulated under Unreleased becomes this release's
+            // notes, and a fresh Unreleased heading takes its place.
+            text = text.replace(
+              /^## \[Unreleased\]\s*$/m,
+              '## [Unreleased]\n\n## [' + version + '] — ' + today
+            );
+
+            // Keep the link definitions at the bottom consistent.
+            const repo = 'https://github.com/Ramachandrajoshi/Code-Graph';
+            if (!text.includes('[' + version + ']: ')) {
+              text = text.replace(
+                /^\[Unreleased\]:.*$/m,
+                '[Unreleased]: ' + repo + '/compare/v' + version + '...HEAD\n' +
+                '[' + version + ']: ' + repo + '/releases/tag/v' + version
+              );
+            }
+
+            fs.writeFileSync(file, text);
+            console.log('CHANGELOG updated for ' + version);
+          "
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+
+      - name: Commit to a release branch
+        run: |
+          git checkout -b "${{ steps.bump.outputs.branch }}"
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "Release v${{ steps.bump.outputs.version }}"
+          git push --force origin "${{ steps.bump.outputs.branch }}"
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          BRANCH="${{ steps.bump.outputs.branch }}"
+
+          BODY=$(cat <<EOF
+          Prepares **v$VERSION**.
+
+          - \`package.json\` bumped to $VERSION
+          - \`CHANGELOG.md\` — Unreleased section moved under \`[$VERSION]\`
+
+          ### Before merging
+
+          - [ ] The CHANGELOG entry explains *why* each change matters, not just what changed
+          - [ ] Breaking changes are called out
+          - [ ] CI is green
+
+          ### After merging
+
+          \`\`\`bash
+          git checkout main && git pull
+          git tag v$VERSION
+          git push origin v$VERSION
+          \`\`\`
+
+          That tag triggers \`release.yml\`, which re-runs the tests and the
+          benchmark, publishes to npm with provenance, and creates the GitHub
+          Release. Nothing is published until the tag exists.
+          EOF
+          )
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Release v$VERSION" \
+            --body "$BODY" || echo "A PR for $BRANCH already exists; it has been updated."

@@ -235,6 +235,16 @@ form the pack's query doesn't cover.
 
 ---
 
+## Releasing
+
+Maintainers only — see [RELEASING.md](RELEASING.md). In short: `npm run release`
+tags from `main`, and the tag triggers a workflow that tests, benchmarks,
+smoke-tests the packed tarball, publishes to npm with provenance, and creates the
+GitHub Release.
+
+Contributors don't need to touch versions. Add your entry under `## [Unreleased]`
+in `CHANGELOG.md`; the release process promotes it.
+
 ## License
 
 By contributing you agree that your contributions are licensed under the

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependency docs are fetched when not installed locally.** Every registry
+  publishes the same artifact cgraph reads off disk, so it is downloaded and run
+  through the same parsers: npm `.tgz` (falling back to `@types/<pkg>`, since a
+  large share of npm ships no types of its own), NuGet `.nupkg`, Maven
+  `-sources.jar`, PyPI wheels. No scraping and no third-party service — the
+  result is version-exact because it is the published artifact.
+- **Maven dependency docs**, local and remote, now that a zip reader exists.
+- `cgraph docs --refresh --guides` fetches [`llms.txt`](https://llmstxt.org)
+  where a project publishes one. Package archives carry API reference because
+  that is what is in the source; they cannot carry setup guides, which were
+  never in the source. This is the only prose source, and coverage is partial.
+- tar.gz and zip readers built on `node:zlib`, with no new dependencies.
+
 - **C# language pack.** Types, members, properties, namespaces, XML doc
   summaries and access modifiers, with `using` resolved to the file declaring
   that namespace. LINQ and BCL calls are classified as runtime built-ins rather

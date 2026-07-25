@@ -62,7 +62,7 @@ export function lookupDocs(store, config, { pkg, symbol = null, top = 15 }) {
         pkg, symbol
       )
     : store.all(
-        `SELECT * FROM externals WHERE package = ? AND symbol != ''
+        `SELECT * FROM externals WHERE package = ? AND symbol != '' AND kind IS NOT 'guide'
           ORDER BY use_count DESC, symbol LIMIT ?`,
         pkg, top
       );
@@ -89,6 +89,15 @@ export function lookupDocs(store, config, { pkg, symbol = null, top = 15 }) {
   const ecosystem = rows[0].ecosystem;
   const version = rows.find((r) => r.version)?.version;
   const lines = [`${pkg}${version ? '@' + version : ''}  (${ecosystem})`, ''];
+
+  // Prose first when the project publishes an llms.txt: it answers "how do I
+  // use this", which the signature list below cannot.
+  const guide = store.get(
+    "SELECT doc FROM externals WHERE package = ? AND symbol = '' AND kind = 'guide'", pkg
+  );
+  if (guide?.doc && !symbol) {
+    lines.push(truncate(guide.doc, 1200), '', '— API used by this project —', '');
+  }
 
   for (const row of rows) {
     const uses = row.use_count ? `  ${row.use_count}x` : '';

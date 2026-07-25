@@ -219,6 +219,58 @@ nothing.
 None of these are required. They move *when* the cost is paid, not whether the
 answer is right.
 
+## Where dependency docs come from
+
+Local first — the copy on disk matches the version you actually resolved:
+
+| Ecosystem | Read from |
+|---|---|
+| npm | `node_modules/<pkg>` → `.d.ts` via the `types`/`exports` entry |
+| NuGet | `~/.nuget/packages` → the XML doc beside the DLL |
+| PyPI | `site-packages` → `.pyi` stubs, else `.py` signatures |
+
+When it isn't installed — a fresh checkout, another machine's cache — cgraph
+fetches **the package's own published artifact** and extracts it with the same
+parsers:
+
+| Ecosystem | Fetched | Contains |
+|---|---|---|
+| npm | `.tgz`, falling back to `@types/<pkg>` | `.d.ts` |
+| NuGet | `.nupkg` | XML documentation |
+| Maven | `-sources.jar` | `.java` sources |
+| PyPI | wheel or sdist | `.pyi` / `.py` |
+
+No scraping, no API key, no third-party service. The result is version-exact
+because it *is* the published artifact, and identical to what local extraction
+would have produced.
+
+```bash
+cgraph docs --refresh            # local first, registry when absent
+cgraph docs --refresh --guides   # also fetch llms.txt where published
+cgraph docs --refresh --offline  # never touch the network
+```
+
+### API reference vs. prose
+
+Package archives carry **API reference** — signatures and doc comments, because
+that is what is in the source. They cannot carry setup guides or concepts, which
+were never in the source.
+
+`--guides` fetches [`llms.txt`](https://llmstxt.org) where a project publishes
+one, which is the only prose source here. Coverage is real but partial.
+
+For broad prose documentation across many libraries, a docs-focused MCP server
+such as [Context7](https://github.com/upstash/context7) complements cgraph
+rather than competing with it — install both. They answer different questions:
+
+| Question | Answered by |
+|---|---|
+| What does *my project* use from this library, and where? | cgraph |
+| How does this library work in general? | a docs MCP |
+
+cgraph's `docs` is ranked by **your** usage, which no general documentation
+source can do.
+
 ## Honest by construction
 
 Every edge carries a confidence, and it is visible in the output:

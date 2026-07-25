@@ -21,6 +21,7 @@ export async function run(args) {
       const progress = new Progress('  reading', { quiet: args.quiet });
       const result = await extractAllDocs(store, config, {
         offline: args.offline ?? config.deps.offline,
+        withGuides: !!args.guides,
         onProgress: (pkg) => progress.tick(1, pkg),
       });
       progress.done();
@@ -80,6 +81,7 @@ ${color.bold('cgraph docs')} — dependency API, ranked by what this project cal
 
 ${color.bold('OPTIONS')}
   --refresh      Extract signatures now (local first, registry as fallback)
+  --guides       With --refresh, also fetch llms.txt where projects publish one
   --offline      With --refresh, never touch the network
   --top <n>      Symbols per package (default 15)
   --json         Machine-readable output

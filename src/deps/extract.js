@@ -29,7 +29,7 @@ import { extract } from '../core/extract.js';
  * than by the manifest, so a dependency listed in package.json but never
  * imported costs nothing.
  */
-export async function extractAllDocs(store, config, { offline = false, onProgress = null } = {}) {
+export async function extractAllDocs(store, config, { offline = false, onProgress = null, withGuides = false } = {}) {
   const packages = store.all(
     `SELECT package, ecosystem, COUNT(*) AS symbols, SUM(use_count) AS uses
        FROM externals
@@ -47,7 +47,7 @@ export async function extractAllDocs(store, config, { offline = false, onProgres
     for (const pkg of packages) {
       onProgress?.(pkg.package);
       try {
-        const api = await resolvePackageApi(pkg, config, host, { offline });
+        const api = await resolvePackageApi(pkg, config, host, { offline, withGuides });
         if (!api) { result.failed++; continue; }
 
         if (api.cached) result.fromCache++;
@@ -77,7 +77,7 @@ export async function extractAllDocs(store, config, { offline = false, onProgres
  * changed dependency a cache miss, and still lets ten projects sharing an
  * identical express@4 extract it once.
  */
-async function resolvePackageApi(pkg, config, host, { offline }) {
+async function resolvePackageApi(pkg, config, host, { offline, withGuides = false }) {
   const located = locate(pkg, config);
   const version = located?.version ?? null;
   const fingerprint = located ? sourceFingerprint(located) : null;
@@ -87,7 +87,15 @@ async function resolvePackageApi(pkg, config, host, { offline }) {
 
   let api = null;
   if (located) api = await extractLocal(located, pkg, host);
-  if (!api && !offline) api = await fetchRegistry(pkg);
+  if (!api && !offline) api = await fetchRegistry(pkg, host);
+
+  // Prose guidance, where the project publishes it. Separate from the API
+  // surface because it comes from a different place and answers a different
+  // question — "how do I use this" rather than "what does it expose".
+  if (api && withGuides && !offline) {
+    const guide = await fetchGuide(pkg, config).catch(() => null);
+    if (guide) { api.guide = guide.text; api.guideUrl = guide.url; }
+  }
 
   if (api) writeCache(pkg.ecosystem, pkg.package, version ?? api.version, fingerprint, api);
   return api;
@@ -364,24 +372,46 @@ async function extractPython(located, host) {
  * Reuses the project's own extraction pipeline, which is why adding a language
  * pack gets dependency docs for free.
  */
+/**
+ * Which pack parses a dependency written in a given language, and which
+ * tree-sitter grammar it needs. Kept as data so adding an ecosystem is a
+ * one-line change rather than another branch.
+ */
+const DEP_LANGUAGES = {
+  typescript: { pack: 'typescript', grammar: 'typescript' },
+  python:     { pack: 'python',     grammar: 'python' },
+  java:       { pack: 'java',       grammar: 'java' },
+  csharp:     { pack: 'csharp',     grammar: 'c_sharp' },
+};
+
 async function parseSymbols(host, langId, source, file) {
-  const { PackRegistry } = await import('../packs/registry.js');
-  const packModule = await import(`../packs/${langId === 'python' ? 'python' : 'typescript'}/index.js`);
+  const spec = DEP_LANGUAGES[langId];
+  if (!spec) return [];
+
+  const packModule = await import(`../packs/${spec.pack}/index.js`);
   const pack = packModule.default;
 
   const compiled = {};
   for (const [key, queryFile] of Object.entries(pack.queries)) {
     const text = readFileSafe(queryFile);
-    if (text) compiled[key] = await host.query(langId, `deps:${langId}:${key}`, text, { origin: 'deps' });
+    if (text) {
+      compiled[key] = await host.query(spec.grammar, `deps:${langId}:${key}`, text, { origin: 'deps' });
+    }
   }
   if (!compiled.tags) return [];
 
-  const captures = await host.run(langId, source, compiled);
+  const captures = await host.run(spec.grammar, source, compiled);
   const { nodes } = extract({ path: file, source, captures, pack });
 
+  // Depth 1 is the module's own top level. For Java and C# the public surface
+  // sits one level deeper, inside a package or namespace declaration, so both
+  // levels count as API.
+  const maxDepth = langId === 'java' || langId === 'csharp' ? 3 : 1;
+
   return nodes
-    .filter((n) => n.kind !== 'module' && n.depth === 1)   // top-level API only
+    .filter((n) => n.kind !== 'module' && n.depth <= maxDepth)
     .filter((n) => !n.name.startsWith('_'))                 // conventionally private
+    .filter((n) => n.visibility !== 'private' && n.visibility !== 'internal')
     .map((n) => ({
       symbol: n.name,
       kind: n.kind,
@@ -399,39 +429,121 @@ async function parseSymbols(host, langId, source, file) {
  * Downloading and unpacking whole tarballs to index a dependency would cost far
  * more than the tokens it saves.
  */
-async function fetchRegistry(pkg) {
-  if (pkg.ecosystem === 'npm') return fetchNpm(pkg.package);
-  if (pkg.ecosystem === 'pypi') return fetchPypi(pkg.package);
+/**
+ * Registry fallback: download the package's own artifact and extract it with
+ * the same parsers used for a locally-installed copy.
+ *
+ * This is the path for a dependency that is not on disk — a fresh checkout, a
+ * package restored on another machine, or an ecosystem whose packages are not
+ * unpacked locally at all. It fetches the exact artifact the ecosystem
+ * publishes, so the result is version-specific and identical to what local
+ * extraction would have produced.
+ */
+async function fetchRegistry(pkg, host) {
+  const { fetchPackageArtifact } = await import('./registry.js');
+  const artifact = await fetchPackageArtifact(pkg);
+  if (!artifact) return null;
+
+  const symbols = await parseArtifact(artifact, host);
+  if (!symbols.length) {
+    // Reached the registry but found nothing parseable — a package with no
+    // types, no XML docs, no sources jar. Recording the version still beats an
+    // empty answer, and marks it as known-but-undocumented.
+    return {
+      version: artifact.version, source: 'registry',
+      description: artifact.description ?? null, symbols: [],
+    };
+  }
+
+  return {
+    version: artifact.version,
+    source: 'registry',
+    description: artifact.description ?? null,
+    typesFrom: artifact.typesFrom ?? null,
+    symbols,
+  };
+}
+
+/**
+ * Fetch a package's `llms.txt`, if it publishes one.
+ *
+ * Package archives carry API reference — signatures and doc comments — because
+ * that is what is in the source. They cannot carry setup guides or concepts,
+ * because those were never in the source. `llms.txt` is the emerging convention
+ * for publishing exactly that, and it is the only prose source here.
+ *
+ * Coverage is thin and growing, so this is best-effort: a miss costs one
+ * request and is recorded so it is not retried on every pass.
+ */
+async function fetchGuide(pkg, config) {
+  const homepage = await packageHomepage(pkg);
+  if (!homepage) return null;
+
+  const { fetchLlmsTxt } = await import('./registry.js');
+  return fetchLlmsTxt(homepage);
+}
+
+/**
+ * A package's documentation site.
+ *
+ * Preferring `homepage` over `repository` matters: llms.txt lives on the docs
+ * site, and a GitHub URL would 404 every time.
+ */
+async function packageHomepage(pkg) {
+  if (pkg.ecosystem === 'npm' || pkg.ecosystem === 'node') {
+    const meta = await fetchJson(`https://registry.npmjs.org/${encodeURIComponent(pkg.package).replace('%40', '@')}`);
+    const latest = meta?.['dist-tags']?.latest;
+    return meta?.versions?.[latest]?.homepage ?? meta?.homepage ?? null;
+  }
+  if (pkg.ecosystem === 'pypi') {
+    const meta = await fetchJson(`https://pypi.org/pypi/${encodeURIComponent(pkg.package)}/json`);
+    const info = meta?.info ?? {};
+    return info.docs_url ?? info.home_page ?? info.project_urls?.Documentation ?? null;
+  }
   return null;
 }
 
-async function fetchNpm(name) {
-  const meta = await fetchJson(`https://registry.npmjs.org/${encodeURIComponent(name).replace('%40', '@')}`);
-  if (!meta) return null;
+/**
+ * Turn fetched archive members into symbols.
+ *
+ * Dispatches on the artifact kind rather than the file extension so each
+ * ecosystem reuses exactly the parser its local path uses: .d.ts and .pyi go
+ * through tree-sitter, .NET XML through the doc parser, Java sources through
+ * tree-sitter again.
+ */
+async function parseArtifact(artifact, host) {
+  const out = [];
 
-  const version = meta['dist-tags']?.latest;
-  const info = version ? meta.versions?.[version] : null;
+  if (artifact.kind === 'nuget') {
+    const { parseXmlDoc } = await import('./dotnet-xmldoc.js');
+    // Newest target framework wins, matching the local NuGet path.
+    const names = [...artifact.files.keys()].sort();
+    const chosen = names.at(-1);
+    if (chosen) out.push(...parseXmlDoc(artifact.files.get(chosen)).symbols);
+    return out;
+  }
 
-  return {
-    version: version ?? null,
-    source: 'registry',
-    description: info?.description ?? meta.description ?? null,
-    // Signatures are not fetched: they would require downloading the tarball.
-    // Recording the package with its description still improves `docs` output
-    // over nothing, and marks it as known-but-undocumented.
-    symbols: [],
-  };
-}
+  const langByKind = { npm: 'typescript', python: 'python', maven: 'java' };
+  const lang = langByKind[artifact.kind];
+  if (!lang || !host) return out;
 
-async function fetchPypi(name) {
-  const meta = await fetchJson(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`);
-  if (!meta) return null;
-  return {
-    version: meta.info?.version ?? null,
-    source: 'registry',
-    description: meta.info?.summary ?? null,
-    symbols: [],
-  };
+  // Cap the work: a sources jar holds thousands of files and nobody reads past
+  // the first page of any one package's API.
+  const entries = [...artifact.files.entries()]
+    .filter(([name]) => !name.endsWith('package.json'))
+    .slice(0, 40);
+
+  for (const [name, text] of entries) {
+    if (!text || text.length > 400_000) continue;
+    try {
+      out.push(...await parseSymbols(host, lang, text, name));
+    } catch {
+      // One unparseable member must not discard the rest of the package.
+    }
+    if (out.length > 400) break;
+  }
+
+  return out;
 }
 
 async function fetchJson(url) {
@@ -493,6 +605,18 @@ function storeApi(store, pkg, api) {
         WHERE ecosystem = ? AND package = ?`,
       api.version, api.source, pkg.ecosystem, pkg.package
     );
+
+    // The guide is prose about the package as a whole, so it hangs off the
+    // package row (symbol = '') rather than any one member.
+    if (api.guide) {
+      store.run(
+        `INSERT INTO externals(ecosystem, package, version, symbol, kind, doc, source, use_count)
+         VALUES(?, ?, ?, '', 'guide', ?, ?, 0)
+         ON CONFLICT(ecosystem, package, symbol)
+         DO UPDATE SET doc = excluded.doc, kind = 'guide'`,
+        pkg.ecosystem, pkg.package, api.version, api.guide, api.source
+      );
+    }
 
     const update = store.stmt(
       `UPDATE externals SET signature = ?, doc = ?, kind = ?

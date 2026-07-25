@@ -1,5 +1,5 @@
 {
-  "name": "code-graph",
+  "name": "cgraph",
   "version": "0.1.0",
   "description": "Token-efficient code retrieval for AI agents. Builds a queryable graph of your codebase and serves it over MCP, so agents stop burning context on grep and whole-file reads.",
   "type": "module",
@@ -17,8 +17,7 @@
     "node": ">=22.13.0"
   },
   "bin": {
-    "cgraph": "./bin/cgraph.js",
-    "code-graph": "./bin/cgraph.js"
+    "cgraph": "./bin/cgraph.js"
   },
   "main": "./src/index.js",
   "exports": {
@@ -67,7 +66,7 @@
     "tokens",
     "context",
     "code-search",
-    "code-graph",
+    "cgraph",
     "knowledge-graph",
     "call-graph",
     "impact-analysis",

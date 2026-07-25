@@ -18,7 +18,7 @@ export async function run(args) {
     workers: args.workers,
   }));
 
-  // A dry run is a pure read: it must never create .codegraph/ as a side effect.
+  // A dry run is a pure read: it must never create .cgraph/ as a side effect.
   // Users reach for it precisely to see what *would* happen.
   if (args.dryRun) return dryRun(config, args);
 
@@ -173,7 +173,7 @@ ${color.bold('cgraph index')} — build or refresh the code index
 
 ${color.bold('OPTIONS')}
   --force        Ignore hashes and re-parse every file
-  --dry-run      Walk and report only; does not create .codegraph/
+  --dry-run      Walk and report only; does not create .cgraph/
   --verbose      With --dry-run, list every file
   --embed        Also generate embeddings (requires configuration; costs money)
   --workers <n>  Parser worker count (default: cpus - 1)

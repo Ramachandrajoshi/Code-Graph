@@ -289,7 +289,7 @@ test('a pack authored outside the repo is discovered and used', opts, async () =
   const fx = await buildFixture({ 'package.json': '{"name":"t"}', 'src/a.js': 'export function x() {}\n' });
 
   try {
-    const packDir = path.join(fx.root, '.codegraph', 'packs', 'toml');
+    const packDir = path.join(fx.root, '.cgraph', 'packs', 'toml');
     fs.mkdirSync(path.join(packDir, 'queries'), { recursive: true });
 
     fs.writeFileSync(
@@ -316,7 +316,7 @@ test('a pack authored outside the repo is discovered and used', opts, async () =
     const { DEFAULTS } = await import('../src/core/config.js');
     const config = {
       ...DEFAULTS, root: fx.root,
-      dir: path.join(fx.root, '.codegraph'),
+      dir: path.join(fx.root, '.cgraph'),
       deps: { ...DEFAULTS.deps, offline: true },
     };
     const registry = await PackRegistry.load(config);
@@ -335,7 +335,7 @@ test('a pack authored outside the repo is discovered and used', opts, async () =
 test('a broken third-party pack does not stop indexing', opts, async () => {
   const fx = await buildFixture({ 'package.json': '{"name":"t"}', 'src/a.js': 'export function keepMe() {}\n' });
   try {
-    const packDir = path.join(fx.root, '.codegraph', 'packs', 'broken');
+    const packDir = path.join(fx.root, '.cgraph', 'packs', 'broken');
     fs.mkdirSync(packDir, { recursive: true });
     fs.writeFileSync(path.join(packDir, 'index.js'), 'export default { /* no id */ };\n');
 
@@ -346,7 +346,7 @@ test('a broken third-party pack does not stop indexing', opts, async () => {
     // be allowed to take down the whole tool.
     const registry = await PackRegistry.load({
       ...DEFAULTS, root: fx.root,
-      dir: path.join(fx.root, '.codegraph'),
+      dir: path.join(fx.root, '.cgraph'),
       deps: { ...DEFAULTS.deps, offline: true },
     });
     assert.ok(registry.packs.get('javascript'), 'builtin packs still load');

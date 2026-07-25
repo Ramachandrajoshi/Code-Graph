@@ -107,7 +107,7 @@ test('initialize returns server info and a negotiated protocol version', opts, a
   try {
     const { responses } = await session(fx.root, [INIT]);
     const init = responses.find((r) => r.id === 1);
-    assert.equal(init.result.serverInfo.name, 'code-graph');
+    assert.equal(init.result.serverInfo.name, 'cgraph');
     assert.equal(init.result.protocolVersion, '2025-06-18', 'should echo a version we speak');
     assert.ok(init.result.capabilities.tools);
   } finally { fx.cleanup(); }

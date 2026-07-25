@@ -38,7 +38,7 @@ const SELF = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 /**
  * Question templates.
  *
- * Each states how code-graph answers it and how a grep-driven agent would have
+ * Each states how cgraph answers it and how a grep-driven agent would have
  * to. `baselineImpossible` marks questions no amount of grepping can answer,
  * which are reported separately rather than folded into the ratio.
  */

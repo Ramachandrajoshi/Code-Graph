@@ -8,13 +8,10 @@ node_modules/
 !.yarn/plugins
 !.yarn/versions
 
-# The code-graph index itself.
+# The cgraph index, and the machine-wide cache if CGRAPH_HOME points here.
 # Machine-specific absolute paths, rewritten constantly, and fully regenerable
 # from source — committing it produces enormous diffs on every branch switch.
-.codegraph/
-
-# Its machine-wide cache, if someone points CODE_GRAPH_HOME at the repo
-.code-graph/
+.cgraph/
 
 # Build output
 dist/

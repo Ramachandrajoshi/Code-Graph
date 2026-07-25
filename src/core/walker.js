@@ -21,7 +21,7 @@ import ignore from 'ignore';
 import { toPosix, relFromRoot } from './paths.js';
 
 /** Filenames that contribute ignore rules, in the order git applies them. */
-const IGNORE_FILES = ['.gitignore', '.codegraphignore'];
+const IGNORE_FILES = ['.gitignore', '.cgraphignore'];
 
 /**
  * A stack of ignore matchers, one frame per directory that declared rules.

@@ -158,7 +158,7 @@ export class Store {
     if (after !== SCHEMA_VERSION) {
       throw new Error(
         `Schema version ${after} does not match expected ${SCHEMA_VERSION}. ` +
-          'The index may have been written by a newer code-graph; delete .codegraph/ and re-index.'
+          'The index may have been written by a newer cgraph; delete .cgraph/ and re-index.'
       );
     }
   }

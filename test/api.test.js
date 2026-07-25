@@ -1,8 +1,8 @@
 /**
  * Programmatic API tests.
  *
- * The public entry points are part of the package contract: `code-graph` and
- * `code-graph/sdk` are declared in `exports`, so breaking them breaks consumers
+ * The public entry points are part of the package contract: `cgraph` and
+ * `cgraph/sdk` are declared in `exports`, so breaking them breaks consumers
  * silently at import time. These tests import them exactly as an installed
  * package would.
  */
@@ -55,7 +55,7 @@ test('the sdk entry point exports its documented surface', async () => {
     'definePack', 'validatePack', 'makeTestContext', 'CAPTURES',
     'tryCandidates', 'normalizeRelative', 'splitIdentifier', 'EXACT', 'INFERRED',
   ]) {
-    assert.ok(sdk[name], `'${name}' should be exported from code-graph/sdk`);
+    assert.ok(sdk[name], `'${name}' should be exported from cgraph/sdk`);
   }
 });
 

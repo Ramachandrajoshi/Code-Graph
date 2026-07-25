@@ -72,7 +72,7 @@ export async function run(args) {
       if (!filename) return;
       const rel = filename.replace(/\\/g, '/');
       // Ignore our own writes, or the watcher would trigger itself forever.
-      if (rel.startsWith('.codegraph/') || rel.startsWith('.git/')) return;
+      if (rel.startsWith('.cgraph/') || rel.startsWith('.git/')) return;
       schedule();
     });
   } catch (err) {

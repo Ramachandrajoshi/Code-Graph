@@ -24,14 +24,14 @@ export async function run(args) {
     // Startup failures must be legible: the client shows stderr, and "no index"
     // is by far the most common cause.
     process.stderr.write(
-      `[code-graph] cannot start: ${err.message}\n` +
-        '[code-graph] run `cgraph init` in the project directory first.\n'
+      `[cgraph] cannot start: ${err.message}\n` +
+        '[cgraph] run `cgraph init` in the project directory first.\n'
     );
     process.exit(1);
   }
 
   process.stderr.write(
-    `[code-graph] serving ${ctx.config.root} (${ctx.store.stats().nodes} symbols)\n`
+    `[cgraph] serving ${ctx.config.root} (${ctx.store.stats().nodes} symbols)\n`
   );
 
   const shutdown = () => {
@@ -53,6 +53,6 @@ Normally started by your agent, not by hand. \`cgraph init\` registers it
 automatically in .mcp.json, .cursor/mcp.json, and similar.
 
 ${color.bold('OPTIONS')}
-  --root <dir>   Project to serve (default: nearest .codegraph)
+  --root <dir>   Project to serve (default: nearest .cgraph)
 `);
 }

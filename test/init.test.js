@@ -1,7 +1,7 @@
 /**
  * `init` tests.
  *
- * init is the only command that writes outside .codegraph/, so it is held to a
+ * init is the only command that writes outside .cgraph/, so it is held to a
  * stricter standard: never clobber a config it did not create, never destroy a
  * file it cannot parse, and never create directories for tools the project does
  * not use. A tool that silently rewrites a developer's editor config loses
@@ -51,8 +51,8 @@ test('creates the index and a config file', opts, () => {
   const root = makeRepo(BASE);
   try {
     init(root);
-    assert.ok(fs.existsSync(path.join(root, '.codegraph', 'index.db')), 'index created');
-    assert.ok(fs.existsSync(path.join(root, '.codegraph', 'config.json')), 'config created');
+    assert.ok(fs.existsSync(path.join(root, '.cgraph', 'index.db')), 'index created');
+    assert.ok(fs.existsSync(path.join(root, '.cgraph', 'config.json')), 'config created');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -61,9 +61,9 @@ test('registers an MCP server in .mcp.json', opts, () => {
   try {
     init(root);
     const mcp = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8'));
-    assert.ok(mcp.mcpServers['code-graph'], 'server registered');
-    assert.equal(mcp.mcpServers['code-graph'].command, 'cgraph');
-    assert.ok(mcp.mcpServers['code-graph'].args.includes('serve'));
+    assert.ok(mcp.mcpServers['cgraph'], 'server registered');
+    assert.equal(mcp.mcpServers['cgraph'].command, 'cgraph');
+    assert.ok(mcp.mcpServers['cgraph'].args.includes('serve'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -77,22 +77,22 @@ test('preserves existing servers when registering', opts, () => {
     const mcp = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8'));
     assert.ok(mcp.mcpServers.other, 'an unrelated server must survive');
     assert.equal(mcp.mcpServers.other.command, 'other-tool');
-    assert.ok(mcp.mcpServers['code-graph']);
+    assert.ok(mcp.mcpServers['cgraph']);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('does not overwrite an existing code-graph entry', opts, () => {
+test('does not overwrite an existing cgraph entry', opts, () => {
   // The user may have customised the command or args; init must not stomp it.
   const root = makeRepo({
     ...BASE,
     '.mcp.json': JSON.stringify({
-      mcpServers: { 'code-graph': { command: 'custom-path/cgraph', args: ['serve'] } },
+      mcpServers: { 'cgraph': { command: 'custom-path/cgraph', args: ['serve'] } },
     }, null, 2),
   });
   try {
     init(root);
     const mcp = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8'));
-    assert.equal(mcp.mcpServers['code-graph'].command, 'custom-path/cgraph', 'customisation preserved');
+    assert.equal(mcp.mcpServers['cgraph'].command, 'custom-path/cgraph', 'customisation preserved');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -127,27 +127,27 @@ test('--no-mcp skips all agent registration', opts, () => {
   try {
     init(root, ['--no-mcp']);
     assert.ok(!fs.existsSync(path.join(root, '.mcp.json')));
-    assert.ok(fs.existsSync(path.join(root, '.codegraph', 'index.db')), 'still indexes');
+    assert.ok(fs.existsSync(path.join(root, '.cgraph', 'index.db')), 'still indexes');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('adds .codegraph/ to an existing .gitignore', opts, () => {
+test('adds .cgraph/ to an existing .gitignore', opts, () => {
   const root = makeRepo({ ...BASE, '.gitignore': 'node_modules/\n', '.git/config': '' });
   try {
     init(root);
     const text = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
-    assert.match(text, /^\.codegraph\/$/m);
+    assert.match(text, /^\.cgraph\/$/m);
     assert.match(text, /node_modules\//, 'existing rules preserved');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('does not duplicate an existing .codegraph entry', opts, () => {
-  const root = makeRepo({ ...BASE, '.gitignore': '.codegraph/\n', '.git/config': '' });
+test('does not duplicate an existing .cgraph entry', opts, () => {
+  const root = makeRepo({ ...BASE, '.gitignore': '.cgraph/\n', '.git/config': '' });
   try {
     init(root);
     init(root);
     const text = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
-    assert.equal((text.match(/\.codegraph/g) ?? []).length, 1, 'idempotent');
+    assert.equal((text.match(/\.cgraph/g) ?? []).length, 1, 'idempotent');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

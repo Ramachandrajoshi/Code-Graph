@@ -1,7 +1,7 @@
 /**
  * Configuration loading.
  *
- * Precedence, lowest to highest: built-in defaults, `.codegraph/config.json`,
+ * Precedence, lowest to highest: built-in defaults, `.cgraph/config.json`,
  * environment variables, explicit CLI flags. Everything is optional — the tool
  * must work with zero configuration in a repo it has never seen.
  */
@@ -23,7 +23,7 @@ export const DEFAULTS = {
 
   // Extra ignore globs on top of .gitignore, applied to every project.
   ignore: [
-    '.codegraph/**',
+    '.cgraph/**',
     '**/node_modules/**',
     '**/.git/**',
     '**/dist/**',
@@ -73,13 +73,13 @@ export const DEFAULTS = {
 
 /** Absolute path to the shared, machine-wide cache (grammars, dependency docs). */
 export function userCacheDir() {
-  if (process.env.CODE_GRAPH_HOME) return path.resolve(process.env.CODE_GRAPH_HOME);
-  return path.join(os.homedir(), '.code-graph');
+  if (process.env.CGRAPH_HOME) return path.resolve(process.env.CGRAPH_HOME);
+  return path.join(os.homedir(), '.cgraph');
 }
 
 /** Absolute path to a project's index directory. */
 export function projectDir(root) {
-  return path.join(root, '.codegraph');
+  return path.join(root, '.cgraph');
 }
 
 /** Absolute path to a project's SQLite index. */
@@ -118,7 +118,7 @@ export function loadConfig(cwd = process.cwd(), overrides = {}) {
 
   let config = deepMerge(DEFAULTS, fileConfig);
 
-  if (process.env.CODE_GRAPH_OFFLINE === '1') {
+  if (process.env.CGRAPH_OFFLINE === '1') {
     config = deepMerge(config, { deps: { offline: true } });
   }
 
@@ -128,7 +128,7 @@ export function loadConfig(cwd = process.cwd(), overrides = {}) {
   return { ...config, root, dir, db: dbPath(root), cacheDir: userCacheDir() };
 }
 
-/** Write config back to `.codegraph/config.json`, creating the directory. */
+/** Write config back to `.cgraph/config.json`, creating the directory. */
 export function saveConfig(root, settings) {
   const dir = projectDir(root);
   fs.mkdirSync(dir, { recursive: true });

@@ -3,9 +3,9 @@
  *
  * Discovery order, later overriding earlier:
  *   1. builtin packs shipped here
- *   2. node_modules/code-graph-pack-*      (a pack installs like any dependency)
- *   3. ~/.code-graph/packs/*               (the user's personal packs)
- *   4. .codegraph/packs/*                  (project-local, checked into the repo)
+ *   2. node_modules/cgraph-pack-*      (a pack installs like any dependency)
+ *   3. ~/.cgraph/packs/*               (the user's personal packs)
+ *   4. .cgraph/packs/*                  (project-local, checked into the repo)
  *
  * A pack is a plain object; every hook on it is optional. The generic path —
  * grammar plus a tags query and nothing else — is a first-class citizen, not a
@@ -54,7 +54,7 @@ export class PackRegistry {
         }
       } catch (err) {
         // One broken third-party pack must not take down indexing entirely.
-        process.emitWarning(`code-graph: failed to load pack ${src.origin}: ${err.message}`);
+        process.emitWarning(`cgraph: failed to load pack ${src.origin}: ${err.message}`);
       }
     }
 
@@ -108,7 +108,7 @@ export class PackRegistry {
           out[key] = fs.readFileSync(file, 'utf8');
         } catch (err) {
           process.emitWarning(
-            `code-graph: pack '${pack.id}' declares query '${key}' at ${file} but it could not be read: ${err.message}`
+            `cgraph: pack '${pack.id}' declares query '${key}' at ${file} but it could not be read: ${err.message}`
           );
         }
       }
@@ -274,7 +274,7 @@ function discoverExternal(config) {
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      if (prefixed && !entry.name.startsWith('code-graph-pack-')) continue;
+      if (prefixed && !entry.name.startsWith('cgraph-pack-')) continue;
 
       found.push({
         dir: pathToFileURL(path.join(base, entry.name) + path.sep),

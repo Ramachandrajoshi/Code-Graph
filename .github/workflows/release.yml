@@ -51,7 +51,7 @@ jobs:
           fi
 
           # A version with a hyphen is a prerelease (1.0.0-beta.1) and must NOT
-          # become the 'latest' dist-tag, or every `npm i code-graph` gets a beta.
+          # become the 'latest' dist-tag, or every `npm i cgraph` gets a beta.
           if [[ "$TAG_VERSION" == *-* ]]; then
             CHANNEL="${TAG_VERSION#*-}"     # beta.1
             CHANNEL="${CHANNEL%%.*}"        # beta
@@ -71,8 +71,8 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           # `npm view` exits non-zero for a package that has never been
           # published, which is the expected state for a first release.
-          if npm view "code-graph@$VERSION" version --json >/dev/null 2>&1; then
-            echo "::error::code-graph@$VERSION is already published. Versions on npm are immutable."
+          if npm view "cgraph@$VERSION" version --json >/dev/null 2>&1; then
+            echo "::error::cgraph@$VERSION is already published. Versions on npm are immutable."
             echo "::error::Bump to a new version rather than retagging."
             exit 1
           fi
@@ -110,7 +110,7 @@ jobs:
               process.exit(1);
             }
             // A tarball carrying tests or the index means a files[] mistake.
-            const leaked = files.filter(f => /^(test|bench)\//.test(f) || f.includes('.codegraph'));
+            const leaked = files.filter(f => /^(test|bench)\//.test(f) || f.includes('.cgraph'));
             if (leaked.length) {
               console.error('::error::Should not be published: ' + leaked.join(', '));
               process.exit(1);
@@ -125,7 +125,7 @@ jobs:
           npm pack
           mkdir -p /tmp/smoke && cd /tmp/smoke
           npm init -y >/dev/null
-          npm install "$GITHUB_WORKSPACE"/code-graph-*.tgz
+          npm install "$GITHUB_WORKSPACE"/cgraph-*.tgz
           mkdir -p src
           printf 'export function findUser(id) { return id; }\n' > src/db.js
           printf "import { findUser } from './db';\nexport function handleLogin(e) { return findUser(e); }\n" > src/app.js
@@ -139,7 +139,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # Publish. Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN anywhere.
   # The trust relationship is configured once at
-  # npmjs.com/package/code-graph/access and is bound to THIS workflow file,
+  # npmjs.com/package/cgraph/access and is bound to THIS workflow file,
   # so a workflow added by an attacker cannot publish.
   # ---------------------------------------------------------------------------
   publish:
@@ -148,7 +148,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: npm
-      url: https://www.npmjs.com/package/code-graph
+      url: https://www.npmjs.com/package/cgraph
     permissions:
       contents: read
       id-token: write   # required for OIDC; without it npm falls back to token auth
@@ -239,13 +239,13 @@ jobs:
             echo ""
             echo '```bash'
             if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then
-              echo "npm install -g code-graph@${{ needs.verify.outputs.npm_tag }}"
+              echo "npm install -g cgraph@${{ needs.verify.outputs.npm_tag }}"
             else
-              echo "npm install -g code-graph"
+              echo "npm install -g cgraph"
             fi
             echo '```'
             echo ""
-            echo "Published to npm as [code-graph@$VERSION](https://www.npmjs.com/package/code-graph/v/$VERSION) with [build provenance](https://docs.npmjs.com/generating-provenance-statements)."
+            echo "Published to npm as [cgraph@$VERSION](https://www.npmjs.com/package/cgraph/v/$VERSION) with [build provenance](https://docs.npmjs.com/generating-provenance-statements)."
           } >> "$NOTES_FILE"
 
           echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
@@ -261,7 +261,7 @@ jobs:
             --title "v${{ needs.verify.outputs.version }}" \
             --notes-file "${{ steps.notes.outputs.notes_file }}" \
             ${{ needs.verify.outputs.prerelease == 'true' && '--prerelease' || '--latest' }} \
-            code-graph-*.tgz 2>/dev/null || \
+            cgraph-*.tgz 2>/dev/null || \
           gh release create "${{ needs.verify.outputs.tag }}" \
             --title "v${{ needs.verify.outputs.version }}" \
             --notes-file "${{ steps.notes.outputs.notes_file }}" \

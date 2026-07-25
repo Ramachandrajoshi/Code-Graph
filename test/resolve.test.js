@@ -235,7 +235,7 @@ test('re-indexing does not duplicate edges', opts, async () => {
     const { DEFAULTS } = await import('../src/core/config.js');
     await new Indexer({
       store: fx.store,
-      config: { ...DEFAULTS, root: fx.root, dir: fx.root + '/.codegraph' },
+      config: { ...DEFAULTS, root: fx.root, dir: fx.root + '/.cgraph' },
       registry: fx.registry,
     }).run({ force: true });
 

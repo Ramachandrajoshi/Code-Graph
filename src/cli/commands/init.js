@@ -1,7 +1,7 @@
 /**
  * `cgraph init` — set up a project and register the MCP server.
  *
- * This is the only command that modifies files outside `.codegraph/`, so it is
+ * This is the only command that modifies files outside `.cgraph/`, so it is
  * conservative by design: it never overwrites an existing MCP entry, never
  * rewrites a config file it cannot parse, and reports every change it made.
  * A tool that silently edits a developer's editor config loses trust
@@ -32,7 +32,7 @@ export async function run(args) {
   const config = loadConfig(root, { root });
 
   out('');
-  out(`${color.bold('code-graph')} init  ${root}`);
+  out(`${color.bold('cgraph')} init  ${root}`);
   out('');
 
   fs.mkdirSync(projectDir(root), { recursive: true });
@@ -76,7 +76,7 @@ export async function run(args) {
   const registered = skipMcp ? [] : registerMcp(root);
 
   out('');
-  out(`  ${color.green('created')}   .codegraph/`);
+  out(`  ${color.green('created')}   .cgraph/`);
   if (ignored) out(`  ${color.green('updated')}   .gitignore`);
   for (const r of registered) {
     out(`  ${r.skipped ? color.dim('exists ') : color.green('created')}   ${r.file}  ${color.dim(r.label)}`);
@@ -94,7 +94,7 @@ export async function run(args) {
 }
 
 /**
- * Append `.codegraph/` to .gitignore if absent.
+ * Append `.cgraph/` to .gitignore if absent.
  *
  * The index is a build artifact — machine-specific paths, constantly rewritten.
  * Committing it produces enormous diffs on every branch switch.
@@ -109,10 +109,10 @@ function ensureGitignore(root) {
     if (!fs.existsSync(path.join(root, '.git'))) return false;
   }
 
-  if (/^\.codegraph\/?\s*$/m.test(text)) return false;
+  if (/^\.cgraph\/?\s*$/m.test(text)) return false;
 
   const prefix = text && !text.endsWith('\n') ? '\n' : '';
-  fs.appendFileSync(file, `${prefix}\n# code-graph index (machine-specific, regenerated)\n.codegraph/\n`);
+  fs.appendFileSync(file, `${prefix}\n# cgraph index (machine-specific, regenerated)\n.cgraph/\n`);
   return true;
 }
 
@@ -146,12 +146,12 @@ function registerMcp(root) {
     }
 
     json[target.key] ??= {};
-    if (json[target.key]['code-graph']) {
+    if (json[target.key]['cgraph']) {
       results.push({ file: target.file, label: target.label, skipped: true });
       continue;
     }
 
-    json[target.key]['code-graph'] = {
+    json[target.key]['cgraph'] = {
       command: 'cgraph',
       args: ['serve', '--root', root.replace(/\\/g, '/')],
     };
@@ -168,7 +168,7 @@ function help() {
   out(`
 ${color.bold('cgraph init')} — index this project and register the MCP server
 
-  cgraph init              Index, write .codegraph/, register with your agent
+  cgraph init              Index, write .cgraph/, register with your agent
   cgraph init --no-mcp     Index only; do not touch agent configs
 
 ${color.bold('OPTIONS')}

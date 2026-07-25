@@ -10,7 +10,7 @@
  * project code, every language pack gets this for free once it declares a
  * `deps` adapter.
  *
- * The cache is machine-wide (`~/.code-graph/docs/<eco>/<pkg>@<ver>/`), so ten
+ * The cache is machine-wide (`~/.cgraph/docs/<eco>/<pkg>@<ver>/`), so ten
  * repos using express@4 extract it once.
  */
 

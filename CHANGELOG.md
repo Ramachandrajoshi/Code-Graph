@@ -47,9 +47,9 @@ Initial release.
   a machine-wide cache and verified against pinned SHA-256 digests.
 
 **Plugin system**
-- Language packs discovered from builtins, `node_modules/code-graph-pack-*`,
-  `~/.code-graph/packs/`, and `.codegraph/packs/`, in increasing precedence.
-- `code-graph/sdk` with `definePack`, `validatePack`, and `makeTestContext`.
+- Language packs discovered from builtins, `node_modules/cgraph-pack-*`,
+  `~/.cgraph/packs/`, and `.cgraph/packs/`, in increasing precedence.
+- `cgraph/sdk` with `definePack`, `validatePack`, and `makeTestContext`.
 - `cgraph packs scaffold <lang>` generates a working pack.
 - `core/` contains no language-specific knowledge.
 

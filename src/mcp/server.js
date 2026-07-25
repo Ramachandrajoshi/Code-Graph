@@ -52,7 +52,7 @@ export async function createServer({ root, version }) {
     },
   };
 
-  const server = new StdioServer({ name: 'code-graph', version, handlers });
+  const server = new StdioServer({ name: 'cgraph', version, handlers });
   return { server, store, config };
 }
 
@@ -270,7 +270,7 @@ async function toolStatus(store, config, args) {
 async function toolSimilar(store, config, args) {
   if (!config.embeddings?.enabled) {
     return errorResult(
-      'Semantic search is not configured. Enable embeddings in .codegraph/config.json, ' +
+      'Semantic search is not configured. Enable embeddings in .cgraph/config.json, ' +
         'then run `cgraph index --embed`. Structural search via find usually answers ' +
         'the same question for free.'
     );

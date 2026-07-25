@@ -2,10 +2,10 @@
  * Grammar resolution.
  *
  * The 36 tree-sitter grammars total 51.8 MB. Bundling all of them would make
- * `npm i -g code-graph` a 50 MB download for a user whose repo is one language,
+ * `npm i -g cgraph` a 50 MB download for a user whose repo is one language,
  * which directly undermines the "installs cleanly anywhere" promise. So:
  *
- *   1. shared user cache   ~/.code-graph/grammars/   (populated on first use)
+ *   1. shared user cache   ~/.cgraph/grammars/   (populated on first use)
  *   2. tree-sitter-wasms   optionalDependency        (offline / pre-seeded)
  *   3. CDN download        unpkg                     (verified against manifest)
  *

@@ -138,7 +138,7 @@ export class StdioServer {
    * a stray log line there corrupts the stream and disconnects the client.
    */
   _logError(err) {
-    process.stderr.write(`[code-graph] ${err?.stack ?? err}\n`);
+    process.stderr.write(`[cgraph] ${err?.stack ?? err}\n`);
   }
 }
 

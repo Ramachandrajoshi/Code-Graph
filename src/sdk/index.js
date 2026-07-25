@@ -7,7 +7,7 @@
  * every pack break on refactors.
  *
  * Import as:
- *   import { definePack, tryCandidates, normalizeRelative } from 'code-graph/sdk';
+ *   import { definePack, tryCandidates, normalizeRelative } from 'cgraph/sdk';
  *
  * A minimal working pack:
  *

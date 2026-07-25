@@ -55,8 +55,8 @@ npm run release -- prerelease --preid beta      # 0.2.0-beta.0
 ```
 
 Prereleases publish under the `beta` dist-tag and are marked as prereleases on
-GitHub, so `npm install code-graph` continues to give people the stable version.
-Install one explicitly with `npm install code-graph@beta`.
+GitHub, so `npm install cgraph` continues to give people the stable version.
+Install one explicitly with `npm install cgraph@beta`.
 
 ## Versioning
 
@@ -67,7 +67,7 @@ still settling; from `1.0.0` these are the compatibility boundaries:
 |---|---|
 | CLI commands, flags, output shape | removing or renaming either |
 | MCP tool names and input schemas | removing a tool or a parameter |
-| `code-graph` and `code-graph/sdk` exports | removing or changing a signature |
+| `cgraph` and `cgraph/sdk` exports | removing or changing a signature |
 | Language pack contract | removing a hook or changing what it receives |
 | Index schema | requiring a rebuild rather than migrating |
 
@@ -93,7 +93,7 @@ Every release after this one goes through CI.
 
 ### 2. Configure trusted publishing
 
-At <https://www.npmjs.com/package/code-graph/access>, under **Trusted Publisher**,
+At <https://www.npmjs.com/package/cgraph/access>, under **Trusted Publisher**,
 choose GitHub Actions and enter:
 
 | Field | Value |
@@ -156,5 +156,5 @@ For something genuinely dangerous, deprecate the bad version so installers see a
 warning, then release the fix:
 
 ```bash
-npm deprecate code-graph@0.2.0 "Broken release; use 0.2.1 or later."
+npm deprecate cgraph@0.2.0 "Broken release; use 0.2.1 or later."
 ```

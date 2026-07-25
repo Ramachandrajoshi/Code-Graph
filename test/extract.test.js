@@ -23,7 +23,7 @@ async function reg() {
     registry = await PackRegistry.load({
       ...DEFAULTS,
       root: process.cwd(),
-      dir: process.cwd() + '/.codegraph',
+      dir: process.cwd() + '/.cgraph',
       deps: { ...DEFAULTS.deps, offline: true },
     });
   }

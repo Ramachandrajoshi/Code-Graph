@@ -51,7 +51,7 @@ ${color.bold('DIAGNOSTICS')}
   serve                Run the MCP server on stdio
 
 ${color.bold('GLOBAL OPTIONS')}
-  --root <dir>         Project root (default: nearest .codegraph or .git)
+  --root <dir>         Project root (default: nearest .cgraph or .git)
   --json               Machine-readable output
   --budget <n>         Cap response size in tokens
   --quiet              Suppress progress output

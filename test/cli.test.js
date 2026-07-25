@@ -65,7 +65,7 @@ function setup() {
 function run(root, args) {
   return execFileSync(process.execPath, [BIN, ...args, '--root', root], {
     encoding: 'utf8', cwd: root,
-    env: { ...process.env, NO_COLOR: '1', CODE_GRAPH_HOME: path.join(root, '.cache') },
+    env: { ...process.env, NO_COLOR: '1', CGRAPH_HOME: path.join(root, '.cache') },
   });
 }
 
@@ -239,7 +239,7 @@ test('packs scaffold generates a loadable pack', opts, () => {
   const root = setup();
   try {
     run(root, ['packs', 'scaffold', 'ruby']);
-    const dir = path.join(root, '.codegraph', 'packs', 'ruby');
+    const dir = path.join(root, '.cgraph', 'packs', 'ruby');
     assert.ok(fs.existsSync(path.join(dir, 'index.js')));
     assert.ok(fs.existsSync(path.join(dir, 'queries', 'tags.scm')));
 

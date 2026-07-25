@@ -19,11 +19,11 @@ export async function buildFixture(files, overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-fx-'));
 
   // Redirect the machine-wide cache into the fixture. Tests must never read or
-  // write the developer's real ~/.code-graph — doing so both pollutes their
+  // write the developer's real ~/.cgraph — doing so both pollutes their
   // machine and lets one test's cached data leak into another's assertions.
   // Grammars are still found via the bundled tree-sitter-wasms package.
-  const priorHome = process.env.CODE_GRAPH_HOME;
-  process.env.CODE_GRAPH_HOME = path.join(root, '.cache');
+  const priorHome = process.env.CGRAPH_HOME;
+  process.env.CGRAPH_HOME = path.join(root, '.cache');
 
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(root, rel.split('/').join(path.sep));
@@ -35,8 +35,8 @@ export async function buildFixture(files, overrides = {}) {
     ...DEFAULTS,
     ...overrides,
     root,
-    dir: path.join(root, '.codegraph'),
-    db: path.join(root, '.codegraph', 'index.db'),
+    dir: path.join(root, '.cgraph'),
+    db: path.join(root, '.cgraph', 'index.db'),
     deps: { ...DEFAULTS.deps, offline: true },
   };
 
@@ -98,8 +98,8 @@ export async function buildFixture(files, overrides = {}) {
     cleanup() {
       store.close();
       registry.dispose();
-      if (priorHome === undefined) delete process.env.CODE_GRAPH_HOME;
-      else process.env.CODE_GRAPH_HOME = priorHome;
+      if (priorHome === undefined) delete process.env.CGRAPH_HOME;
+      else process.env.CGRAPH_HOME = priorHome;
       fs.rmSync(root, { recursive: true, force: true });
     },
   };

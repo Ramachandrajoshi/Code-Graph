@@ -101,10 +101,10 @@ test('unanchored pattern matches at any depth', () => {
   });
 });
 
-test('.codegraphignore is honored alongside .gitignore', () => {
+test('.cgraphignore is honored alongside .gitignore', () => {
   withRepo({
     '.gitignore': 'a.js\n',
-    '.codegraphignore': 'b.js\n',
+    '.cgraphignore': 'b.js\n',
     'a.js': '1', 'b.js': '2', 'c.js': '3',
   }, (root) => {
     assert.deepEqual(paths(root).filter((p) => p.endsWith('.js')), ['c.js']);

@@ -105,7 +105,7 @@ async function buildReport(store, config) {
 
 function render(r) {
   out('');
-  out(`${color.bold('code-graph doctor')}  ${r.root}`);
+  out(`${color.bold('cgraph doctor')}  ${r.root}`);
 
   // -- freshness
   out('');

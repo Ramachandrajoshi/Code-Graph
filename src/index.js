@@ -2,14 +2,14 @@
  * Programmatic API.
  *
  * The CLI and MCP server are the primary interfaces; this exists for the cases
- * they do not cover — embedding code-graph in another tool, scripting a custom
+ * they do not cover — embedding cgraph in another tool, scripting a custom
  * report, or building a different agent integration on top of the same index.
  *
- * Language-pack authors want `code-graph/sdk` instead, which is a smaller and
+ * Language-pack authors want `cgraph/sdk` instead, which is a smaller and
  * more stable surface.
  *
  * @example
- * import { openProject } from 'code-graph';
+ * import { openProject } from 'cgraph';
  *
  * const project = await openProject('/path/to/repo');
  * await project.index();

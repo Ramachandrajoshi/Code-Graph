@@ -110,9 +110,9 @@ if (run('git', ['tag', '-l', `v${nextVersion}`])) {
 }
 
 try {
-  run('npm', ['view', `code-graph@${nextVersion}`, 'version']);
+  run('npm', ['view', `cgraph@${nextVersion}`, 'version']);
   fail(
-    `code-graph@${nextVersion} is already on npm.`,
+    `cgraph@${nextVersion} is already on npm.`,
     'Published versions are immutable. Bump to a new version.'
   );
 } catch (err) {
@@ -135,7 +135,7 @@ const isPrerelease = nextVersion.includes('-');
 const npmTag = isPrerelease ? nextVersion.split('-')[1].split('.')[0] : 'latest';
 
 process.stdout.write('\n  Plan\n');
-step(`publish     code-graph@${nextVersion}  (npm dist-tag: ${npmTag})`);
+step(`publish     cgraph@${nextVersion}  (npm dist-tag: ${npmTag})`);
 step(`tag         v${nextVersion}`);
 step(`release     ${REPO}/releases/tag/v${nextVersion}`);
 if (isPrerelease) step('prerelease  will NOT become the default install');

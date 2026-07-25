@@ -58,7 +58,7 @@ export class Embedder {
     if (!apiKey) {
       throw new Error(
         `Embeddings are enabled but ${envVar} is not set.\n` +
-          'The key is read from the environment; it is never stored in .codegraph/config.json.'
+          'The key is read from the environment; it is never stored in .cgraph/config.json.'
       );
     }
     return new Embedder({ provider: e.provider, model: e.model, apiKey });

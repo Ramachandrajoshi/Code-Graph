@@ -83,7 +83,7 @@ async function listPacks(config, args) {
 /**
  * Generate a working pack for a language.
  *
- * Writes to `.codegraph/packs/<id>/`, which the registry discovers with the
+ * Writes to `.cgraph/packs/<id>/`, which the registry discovers with the
  * highest precedence — so a scaffolded pack overrides a builtin immediately,
  * with no install step and no fork.
  */
@@ -129,8 +129,8 @@ function where(config) {
   out('');
   out(color.bold('pack discovery order') + color.dim('  (later overrides earlier)'));
   out('');
-  out(`  1  builtin        ${color.dim('shipped with code-graph')}`);
-  out(`  2  ${path.join(config.root, 'node_modules', 'code-graph-pack-*')}`);
+  out(`  1  builtin        ${color.dim('shipped with cgraph')}`);
+  out(`  2  ${path.join(config.root, 'node_modules', 'cgraph-pack-*')}`);
   out(`  3  ${path.join(userCacheDir(), 'packs')}`);
   out(`  4  ${path.join(config.dir, 'packs')}  ${color.dim('highest precedence')}`);
   out('');
@@ -241,7 +241,7 @@ function help() {
 ${color.bold('cgraph packs')} — inspect and author language packs
 
   cgraph packs list                 Which languages extract symbols
-  cgraph packs scaffold <lang>      Generate a pack in .codegraph/packs/
+  cgraph packs scaffold <lang>      Generate a pack in .cgraph/packs/
   cgraph packs where                Discovery paths, in precedence order
 
 ${color.bold('OPTIONS')}

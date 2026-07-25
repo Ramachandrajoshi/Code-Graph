@@ -1,8 +1,8 @@
-# code-graph
+# cgraph
 
 [![CI](https://github.com/Ramachandrajoshi/Code-Graph/actions/workflows/ci.yml/badge.svg)](https://github.com/Ramachandrajoshi/Code-Graph/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/code-graph.svg)](https://www.npmjs.com/package/code-graph)
-[![node](https://img.shields.io/node/v/code-graph.svg)](https://nodejs.org)
+[![npm](https://img.shields.io/npm/v/cgraph.svg)](https://www.npmjs.com/package/cgraph)
+[![node](https://img.shields.io/node/v/cgraph.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Token-efficient code retrieval for AI agents.
@@ -13,7 +13,7 @@ agent greps, gets forty line hits, reads six files (~12k tokens), and still has
 to guess at the cross-file relationships. The information it actually needed was
 about 300 tokens.
 
-`code-graph` builds a persistent, queryable graph of your codebase and serves it
+`cgraph` builds a persistent, queryable graph of your codebase and serves it
 over MCP, so the agent asks structural questions and gets exact, minimal answers.
 
 ## Measured savings
@@ -22,7 +22,7 @@ Benchmarked with `npm run bench`, which compares each answer against a fair
 simulation of grep-then-read — because an agent cannot act on grep output alone,
 it opens the files those hits point to.
 
-| Question | code-graph | grep + read | saving |
+| Question | cgraph | grep + read | saving |
 |---|---:|---:|---:|
 | What's in this repo? | 9.7k | 446k | **46x** |
 | Where is `X` defined? | 725 | 436k | **601x** |
@@ -38,12 +38,12 @@ Median **62x** on this repository.*
 ## Install
 
 ```bash
-npm install -g code-graph
+npm install -g cgraph
 cd your-project
 cgraph init
 ```
 
-`init` indexes the project, writes `.codegraph/`, adds it to `.gitignore`, and
+`init` indexes the project, writes `.cgraph/`, adds it to `.gitignore`, and
 registers the MCP server in whatever agent configs it finds (`.mcp.json`,
 `.cursor/mcp.json`, `.vscode/mcp.json`, `.windsurf/mcp.json`).
 
@@ -58,7 +58,7 @@ about 2 MB; a JavaScript one, 636 KB.
 For air-gapped or offline environments, pre-install all grammars instead:
 
 ```bash
-npm install -g code-graph tree-sitter-wasms
+npm install -g cgraph tree-sitter-wasms
 ```
 
 ## Commands
@@ -142,7 +142,7 @@ than leaving you to wonder why `find` is empty.
 cgraph packs scaffold kotlin
 ```
 
-That writes a working pack into `.codegraph/packs/kotlin/`, which is discovered
+That writes a working pack into `.cgraph/packs/kotlin/`, which is discovered
 at the highest precedence — no fork, no install step. Core contains zero
 language-specific knowledge; everything arrives through pack hooks:
 
@@ -162,7 +162,7 @@ export default {
 ```
 
 Packs are discovered from, in increasing precedence: builtins,
-`node_modules/code-graph-pack-*`, `~/.code-graph/packs/`, `.codegraph/packs/`.
+`node_modules/cgraph-pack-*`, `~/.cgraph/packs/`, `.cgraph/packs/`.
 
 Upstream tree-sitter grammars ship a `queries/tags.scm` using the same capture
 vocabulary, so they can usually be vendored with minimal edits.
@@ -235,11 +235,11 @@ Invalidation is content-hash based, so `touch` correctly changes nothing.
 
 ## Programmatic API
 
-The CLI and MCP server are the primary interfaces. For embedding code-graph in
+The CLI and MCP server are the primary interfaces. For embedding cgraph in
 another tool:
 
 ```js
-import { openProject } from 'code-graph';
+import { openProject } from 'cgraph';
 
 const project = await openProject('/path/to/repo');
 await project.index();
@@ -254,7 +254,7 @@ project.dependencies();                 // deps ranked by usage
 project.close();
 ```
 
-Pack authors want the smaller, more stable `code-graph/sdk` surface instead —
+Pack authors want the smaller, more stable `cgraph/sdk` surface instead —
 see [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-language).
 
 ## Contributing

@@ -38,7 +38,7 @@ export function absFromRoot(root, rel) {
 }
 
 /**
- * Walk upward from `start` looking for a directory marker (`.git`, `.codegraph`).
+ * Walk upward from `start` looking for a directory marker (`.git`, `.cgraph`).
  * Returns the containing directory, or null.
  */
 export function findUp(start, markers) {
@@ -56,13 +56,13 @@ export function findUp(start, markers) {
 /**
  * Locate the project root for a given working directory.
  *
- * Prefers an existing `.codegraph/` (the user has already chosen a root here),
+ * Prefers an existing `.cgraph/` (the user has already chosen a root here),
  * then `.git/`, then falls back to cwd so the tool still works in a directory
  * that isn't a repo at all.
  */
 export function findProjectRoot(cwd = process.cwd()) {
   return (
-    findUp(cwd, ['.codegraph']) ??
+    findUp(cwd, ['.cgraph']) ??
     findUp(cwd, ['.git']) ??
     path.resolve(cwd)
   );

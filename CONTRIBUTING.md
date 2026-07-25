@@ -1,4 +1,4 @@
-# Contributing to code-graph
+# Contributing to cgraph
 
 Thanks for considering a contribution. The most valuable thing you can add is
 **support for a language that doesn't have it yet** — that path is documented
@@ -34,10 +34,10 @@ This is the highest-value contribution and needs no changes to core.
 
 ```bash
 cd /some/project/using/that/language
-node /path/to/code-graph/bin/cgraph.js packs scaffold kotlin
+node /path/to/cgraph/bin/cgraph.js packs scaffold kotlin
 ```
 
-That writes `.codegraph/packs/kotlin/` with a working `index.js` and commented
+That writes `.cgraph/packs/kotlin/` with a working `index.js` and commented
 query stubs. Packs there are discovered at the highest precedence, so you can
 iterate without installing anything.
 
@@ -87,7 +87,7 @@ Everything below is optional; core falls back to generic behaviour.
 Unit-test a hook without standing up an index:
 
 ```js
-import { makeTestContext } from 'code-graph/sdk';
+import { makeTestContext } from 'cgraph/sdk';
 
 const ctx = makeTestContext({ root: '/repo', files: ['src/db.kt'] });
 assert.deepEqual(pack.resolveImport('./db', 'src/main.kt', ctx), { file: 'src/db.kt' });
@@ -111,7 +111,7 @@ Move the pack into `src/packs/<lang>/`, add it to `BUILTIN` in
 existing Go/Rust/Java ones. **A pack without fixtures will not be merged** —
 that's the only thing keeping 36 languages from silently rotting.
 
-You can also publish independently as `code-graph-pack-<lang>` on npm; anything
+You can also publish independently as `cgraph-pack-<lang>` on npm; anything
 matching that name in a project's `node_modules` is discovered automatically.
 
 ---
@@ -191,7 +191,7 @@ try {
 **Write the test that would have caught the bug**, and say in a comment why it
 matters. A test named `it works` teaches nobody why the code is shaped that way.
 
-Tests must not touch `~/.code-graph` — `buildFixture` redirects the cache
+Tests must not touch `~/.cgraph` — `buildFixture` redirects the cache
 automatically.
 
 ---

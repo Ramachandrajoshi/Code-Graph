@@ -11,7 +11,7 @@ git clone https://github.com/Ramachandrajoshi/Code-Graph.git
 cd Code-Graph
 npm install
 npm test          # 231 tests, ~30s
-npm run bench     # token savings vs grep+read
+npm run bench     # response sizes (regression guard, not a savings claim)
 ```
 
 Requires **Node >= 22.13** — the first release where `node:sqlite` is available
@@ -155,6 +155,11 @@ stops looking. Every truncation says what was dropped.
 **Tokens are the product.** Output is compact text, not JSON — braces and
 repeated keys are ~35% of a JSON payload and carry no information. Before adding
 a field to any response, ask what an agent does differently because of it.
+
+**Do not claim savings.** Report what a response cost, and where a concrete
+comparable exists report that too. Never publish a multiplier against a
+hypothetical grep-and-read workflow: the assumption about what that workflow
+would have done determines the number, so it measures the assumption.
 
 **The tool list is a permanent tax.** MCP schemas sit in the agent's context on
 *every turn*. Adding a tool is a real cost; `test/mcp.test.js` enforces a budget.

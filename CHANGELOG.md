@@ -106,8 +106,8 @@ Initial release.
 **Verification**
 - 231 tests over the real pipeline, real grammars, and real temporary
   repositories.
-- `bench/` measures token reduction against a grep-then-read baseline; runs in
-  CI so the central claim is defended rather than asserted.
+- `bench/` measures response sizes across typical questions, so output bloat
+  shows up as a regression. It deliberately reports no savings multiplier.
 - CI matrix across Windows, macOS, and Linux on Node 22.13, 22, and 24.
 
 ### Notes

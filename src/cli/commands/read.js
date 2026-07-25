@@ -5,8 +5,8 @@
 import { loadConfig } from '../../core/config.js';
 import { Store } from '../../core/store.js';
 import { findSymbol, readSymbol } from '../../core/retrieve.js';
-import { SavingsLedger } from '../../core/tokens.js';
-import { out, json, color } from '../ui.js';
+import { UsageLedger } from '../../core/tokens.js';
+import { out, json, color, toks } from '../ui.js';
 
 export async function run(args) {
   if (args.help) return help();
@@ -33,15 +33,18 @@ export async function run(args) {
       );
     }
 
-    new SavingsLedger(store).record('read', result.tokens, result.baseline);
+    new UsageLedger(store).record('read', result.tokens, result.baseline);
 
     if (args.json) return json(result);
     for (const line of result.lines) out(line);
 
     if (!args.quiet) {
-      const saved = Math.max(0, result.baseline - result.tokens);
+      // Both numbers measured; the difference is not labelled a saving, because
+      // that would assume reading the whole file was the alternative.
       out('');
-      out(color.dim(`~${result.tokens} tokens` + (saved ? `  ·  ${saved} saved vs whole file` : '')));
+      out(color.dim(
+        `~${result.tokens} tokens` + (result.baseline ? `  ·  file ~${toks(result.baseline)}` : '')
+      ));
     }
   } finally {
     store.close();

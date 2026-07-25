@@ -5,7 +5,7 @@
 import { loadConfig } from '../../core/config.js';
 import { Store } from '../../core/store.js';
 import { search, renderHits } from '../../core/search.js';
-import { SavingsLedger } from '../../core/tokens.js';
+import { UsageLedger } from '../../core/tokens.js';
 import { fitToBudget } from '../../core/tokens.js';
 import { out, json, color } from '../ui.js';
 
@@ -49,7 +49,9 @@ export async function run(args) {
     for (const line of fitted.lines) out(line);
     if (fitted.dropped) out(color.dim(`... ${fitted.dropped} more lines (raise --budget)`));
 
-    new SavingsLedger(store).record('find', fitted.tokens, estimateGrepBaseline(store, hits));
+    // No source figure: a search spans many files, and there is no honest way
+    // to say how much of them another workflow would have read.
+    new UsageLedger(store).record('find', fitted.tokens);
 
     if (!args.quiet) {
       out('');
@@ -58,24 +60,6 @@ export async function run(args) {
   } finally {
     store.close();
   }
-}
-
-/**
- * What grep would have cost.
- *
- * The honest comparison is not "grep's output" — an agent cannot act on line
- * hits alone, it opens the files they point to. So the baseline is the token
- * cost of reading every distinct file containing a hit, which is what actually
- * happens in a grep-driven session.
- */
-function estimateGrepBaseline(store, hits) {
-  const paths = [...new Set(hits.map((h) => h.node.path))];
-  if (!paths.length) return 0;
-  const holes = paths.map(() => '?').join(',');
-  return store.get(
-    `SELECT COALESCE(SUM(tok), 0) n FROM files WHERE path IN (${holes})`,
-    ...paths
-  ).n;
 }
 
 function help() {

@@ -5,8 +5,8 @@
 import { loadConfig } from '../../core/config.js';
 import { Store } from '../../core/store.js';
 import { outlineFile, outlineDir } from '../../core/retrieve.js';
-import { SavingsLedger } from '../../core/tokens.js';
-import { out, json, color } from '../ui.js';
+import { UsageLedger } from '../../core/tokens.js';
+import { out, json, color, toks } from '../ui.js';
 
 export async function run(args) {
   if (args.help) return help();
@@ -24,7 +24,7 @@ export async function run(args) {
       ? outlineFile(store, file, { budget, kinds, maxDepth: args.depth ?? 99 })
       : outlineDir(store, target, { depth: args.depth ?? 1, budget });
 
-    new SavingsLedger(store).record('map', result.tokens, result.baseline);
+    new UsageLedger(store).record('map', result.tokens, result.baseline);
 
     if (args.json) {
       return json({
@@ -39,11 +39,13 @@ export async function run(args) {
     for (const line of result.lines) out(line);
 
     if (!args.quiet) {
-      const saved = Math.max(0, result.baseline - result.tokens);
+      // Two measured numbers, stated as facts. Calling the difference "saved"
+      // would assert that reading the file was the alternative, which is a
+      // claim about your workflow that this tool is in no position to make.
       out('');
       out(color.dim(
         `~${result.tokens} tokens` +
-          (saved ? `  ·  ${saved} saved vs reading ${file ? 'this file' : 'these files'}` : '')
+          (result.baseline ? `  ·  ${file ? 'file' : 'these files'} ~${toks(result.baseline)}` : '')
       ));
     }
   } finally {

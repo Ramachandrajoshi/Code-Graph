@@ -102,28 +102,38 @@ function sumTokens(lines) {
 }
 
 /**
- * The savings ledger.
+ * Usage ledger: how many tokens responses actually cost.
  *
- * Every retrieval records what it returned against what the naive alternative
- * (reading the whole file, or every file grep would have matched) would have
- * cost. `cgraph stats` reports the running total. This is the product's central
- * claim, so it is measured continuously rather than asserted once.
+ * Records only measured quantities. An earlier version also recorded a
+ * "baseline" — what a grep-and-read workflow would supposedly have spent — and
+ * reported the ratio as tokens saved. That number was not defensible: it
+ * required assuming how many files another agent would have opened and how much
+ * of each it would have read, and every plausible assumption produced a
+ * different, conveniently flattering result.
+ *
+ * `source` is recorded only where a concrete comparable artifact exists: the
+ * file an outline describes, or the file a symbol was read from. That is a fact
+ * about two things that both exist, not a claim about a road not taken.
  */
-export class SavingsLedger {
+export class UsageLedger {
   constructor(store) {
     this.store = store;
   }
 
-  record(tool, returned, baseline) {
-    const saved = Math.max(0, baseline - returned);
+  /**
+   * @param {string} tool
+   * @param {number} returned  tokens in the response
+   * @param {number} [source]  tokens in the file this response came from, when
+   *                           there is exactly one such file. Omit otherwise.
+   */
+  record(tool, returned, source = 0) {
     this.store?.bumpCounters({
       [`tool.${tool}.calls`]: 1,
       [`tool.${tool}.tokens_returned`]: returned,
-      [`tool.${tool}.tokens_baseline`]: baseline,
+      [`tool.${tool}.tokens_source`]: source,
       'total.tokens_returned': returned,
-      'total.tokens_baseline': baseline,
-      'total.tokens_saved': saved,
+      'total.tokens_source': source,
     });
-    return { returned, baseline, saved };
+    return { returned, source };
   }
 }

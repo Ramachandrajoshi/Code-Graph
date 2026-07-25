@@ -28,7 +28,7 @@ export function toolDefinitions({ embeddingsEnabled = false } = {}) {
       description:
         'Outline a repo, directory, or file: symbol hierarchy with line numbers. ' +
         'Use instead of ls/glob, and instead of reading a file to see what is in it. ' +
-        'Typically 10-20x cheaper than reading.',
+        'Returns a fraction of the file.',
       inputSchema: {
         type: 'object',
         properties: {

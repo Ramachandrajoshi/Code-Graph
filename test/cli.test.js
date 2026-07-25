@@ -108,12 +108,16 @@ test('map outlines a file with line numbers', opts, () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('map of the repo reports token savings', opts, () => {
+test('map reports its own token cost', opts, () => {
+  // A measured response size, not a savings claim. cgraph deliberately does not
+  // assert what some other workflow would have spent, because that number is
+  // determined by the assumption rather than by any measurement.
   const root = setup();
   try {
     const output = run(root, ['map']);
     assert.match(output, /src\//);
-    assert.match(output, /saved/, 'the savings claim is measured on every call');
+    assert.match(output, /~\d+ tokens/, 'the response states what it cost');
+    assert.ok(!/saved/i.test(output), 'must not claim a saving');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -214,14 +218,19 @@ test('doctor reports resolution quality', opts, () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('stats reports the savings ledger after queries', opts, () => {
+test('stats reports measured query cost, not a savings multiplier', opts, () => {
   const root = setup();
   try {
     run(root, ['map']);
     run(root, ['find', 'user']);
     const output = run(root, ['stats']);
-    assert.match(output, /token savings/);
-    assert.match(output, /reduction/);
+    assert.match(output, /query cost/);
+    assert.match(output, /returned/);
+    // Guards against the multiplier creeping back in: it required assuming what
+    // a grep-driven session would have spent, which is not something this tool
+    // can observe.
+    assert.ok(!/reduction|saved|\dx/i.test(output), `stats must not claim savings:
+${output}`);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

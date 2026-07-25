@@ -9,8 +9,9 @@ this file directly.
 <!-- cgraph:start -->
 ## Code navigation: use cgraph, not grep
 
-This repository has a cgraph index. Prefer these tools over shell search — they
-answer the same questions for far fewer tokens (measured: 10-100x on real repos).
+This repository has a cgraph index. Prefer these tools over shell search: they
+return the specific thing asked for rather than whole files, so answers are much
+smaller and carry exact locations.
 
 | Instead of | Use | Returns |
 |---|---|---|
@@ -22,8 +23,8 @@ answer the same questions for far fewer tokens (measured: 10-100x on real repos)
 
 Working rules:
 
-- Start with `map` before exploring. An outline costs ~90 tokens; reading the
-  file costs ~1,800.
+- Start with `map` before exploring: an outline of a file is a small fraction
+  of the file itself, and tells you which one symbol is worth reading in full.
 - Before changing anything shared, run `graph` with `direction=impact` to see
   what depends on it.
 - Edges marked `!` are **inferred** from a name match, not proven through an

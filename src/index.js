@@ -30,7 +30,7 @@ import { outlineFile, outlineDir, findSymbol, readSymbol } from './core/retrieve
 import * as graph from './core/graph.js';
 import { listDependencies, lookupDocs } from './deps/lookup.js';
 import { extractAllDocs } from './deps/extract.js';
-import { estimate, fitToBudget, SavingsLedger } from './core/tokens.js';
+import { estimate, fitToBudget, UsageLedger } from './core/tokens.js';
 
 export {
   // Configuration
@@ -42,7 +42,7 @@ export {
   // Dependencies
   listDependencies, lookupDocs, extractAllDocs,
   // Token accounting
-  estimate, fitToBudget, SavingsLedger,
+  estimate, fitToBudget, UsageLedger,
   // Graph traversal, namespaced to avoid colliding with a caller's `impact`
   graph,
 };

@@ -1,8 +1,11 @@
 /**
- * `cgraph stats` — index size and the token savings ledger.
+ * `cgraph stats` — index size and what queries have actually cost.
  *
- * The savings number is the product's central claim, so it is measured
- * continuously from real usage rather than asserted once in a README.
+ * Reports measured response sizes only. It deliberately does not compute a
+ * savings multiplier: doing so requires assuming what a different workflow
+ * would have spent, and that assumption — not the measurement — determines the
+ * answer. Where a concrete comparable exists (the file an outline describes)
+ * both numbers are shown and the reader can draw their own conclusion.
  */
 
 import { loadConfig } from '../../core/config.js';
@@ -33,8 +36,7 @@ export async function run(args) {
     out(`  ${pad('source', 12)} ${padLeft('~' + toks(s.tok), 8)}  ${color.dim('tokens to read it all')}`);
 
     const returned = Number(counters['total.tokens_returned'] ?? 0);
-    const baseline = Number(counters['total.tokens_baseline'] ?? 0);
-    const saved = Number(counters['total.tokens_saved'] ?? 0);
+    const source = Number(counters['total.tokens_source'] ?? 0);
 
     out('');
     if (!returned) {
@@ -43,10 +45,11 @@ export async function run(args) {
       return;
     }
 
-    out(color.bold('  token savings'));
-    out(`  ${pad('returned', 12)} ${padLeft(toks(returned), 8)}  ${color.dim('what queries actually cost')}`);
-    out(`  ${pad('baseline', 12)} ${padLeft(toks(baseline), 8)}  ${color.dim('what reading the files would have cost')}`);
-    out(`  ${pad('saved', 12)} ${padLeft(toks(saved), 8)}  ${color.green(`${(baseline / returned).toFixed(1)}x reduction`)}`);
+    out(color.bold('  query cost'));
+    out(`  ${pad('returned', 12)} ${padLeft(toks(returned), 8)}  ${color.dim('tokens these queries actually cost')}`);
+    if (source) {
+      out(`  ${pad('files read', 12)} ${padLeft(toks(source), 8)}  ${color.dim('size of the files those answers came from')}`);
+    }
 
     // Per-tool breakdown, so it is obvious which access pattern pays off most.
     const tools = new Map();
@@ -60,10 +63,10 @@ export async function run(args) {
 
     if (tools.size) {
       out('');
-      out(color.dim(`  ${pad('tool', 10)} ${padLeft('calls', 7)} ${padLeft('returned', 10)} ${padLeft('baseline', 10)}  factor`));
+      out(color.dim(`  ${pad('tool', 10)} ${padLeft('calls', 7)} ${padLeft('returned', 10)} ${padLeft('avg', 8)}`));
       for (const [name, t] of [...tools].sort((a, b) => (b[1].calls ?? 0) - (a[1].calls ?? 0))) {
-        const factor = t.tokens_returned ? (t.tokens_baseline / t.tokens_returned).toFixed(1) + 'x' : '—';
-        out(`  ${pad(name, 10)} ${padLeft(t.calls ?? 0, 7)} ${padLeft(toks(t.tokens_returned ?? 0), 10)} ${padLeft(toks(t.tokens_baseline ?? 0), 10)}  ${factor}`);
+        const avg = t.calls ? Math.round((t.tokens_returned ?? 0) / t.calls) : 0;
+        out(`  ${pad(name, 10)} ${padLeft(t.calls ?? 0, 7)} ${padLeft(toks(t.tokens_returned ?? 0), 10)} ${padLeft(toks(avg), 8)}`);
       }
     }
 
@@ -75,7 +78,7 @@ export async function run(args) {
 
 function help() {
   out(`
-${color.bold('cgraph stats')} — index size and cumulative token savings
+${color.bold('cgraph stats')} — index size and what queries have cost
 
 ${color.bold('OPTIONS')}
   --json   Machine-readable output

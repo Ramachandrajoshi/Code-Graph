@@ -172,7 +172,7 @@ CREATE TABLE chunks (
 );
 
 --------------------------------------------------------------------------------
--- Key/value: schema version, index stats, savings ledger counters.
+-- Key/value: schema version, index stats, usage counters.
 -- IF NOT EXISTS because migrate() must bootstrap this table before it can read
 -- the schema version that decides which migrations to run.
 --------------------------------------------------------------------------------

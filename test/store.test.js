@@ -116,9 +116,9 @@ test('foreign keys cascade from files to nodes', async () => {
 
 test('counters accumulate additively', async () => {
   const store = await Store.memory();
-  store.bumpCounters({ 'total.tokens_saved': 100 });
-  store.bumpCounters({ 'total.tokens_saved': 250 });
-  assert.equal(store.counters('total.')['total.tokens_saved'], '350');
+  store.bumpCounters({ 'total.tokens_returned': 100 });
+  store.bumpCounters({ 'total.tokens_returned': 250 });
+  assert.equal(store.counters('total.')['total.tokens_returned'], '350');
   store.close();
 });
 

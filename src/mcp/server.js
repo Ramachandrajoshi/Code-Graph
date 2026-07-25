@@ -20,13 +20,13 @@ import { outlineFile, outlineDir, findSymbol, readSymbol } from '../core/retriev
 import { search, renderHits } from '../core/search.js';
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../core/graph.js';
 import { degree } from '../core/rank.js';
-import { SavingsLedger, fitToBudget } from '../core/tokens.js';
+import { UsageLedger, fitToBudget } from '../core/tokens.js';
 import { lookupDocs, listDependencies } from '../deps/lookup.js';
 
 export async function createServer({ root, version }) {
   const config = loadConfig(root ?? process.cwd(), root ? { root } : {});
   const store = await Store.open(config.db, { create: false });
-  const ledger = new SavingsLedger(store);
+  const ledger = new UsageLedger(store);
   const refresher = new Refresher(store, config);
 
   const handlers = {
@@ -177,8 +177,9 @@ function toolFind(store, config, args, ledger) {
   }
 
   const fitted = fitToBudget(renderHits(hits), budgetOf(config, args));
-  const baseline = grepBaseline(store, hits);
-  ledger.record('find', fitted.tokens, baseline);
+  // No source figure: a search spans many files, and there is no honest way
+  // to say how much of them another workflow would have read.
+  ledger.record('find', fitted.tokens);
 
   let text = fitted.lines.join('\n');
   if (fitted.dropped) text += `\n... ${fitted.dropped} more lines (raise budget)`;
@@ -335,9 +336,11 @@ async function toolStatus(store, config, args, refresher) {
     `deps     ${s.externals}`,
   );
 
+  // A measured cost, not a claimed saving: stating what a different workflow
+  // would have spent would be a guess dressed as a number.
   const counters = store.counters('total.');
-  const saved = Number(counters['total.tokens_saved'] ?? 0);
-  if (saved > 0) lines.push('', `tokens saved so far: ${saved.toLocaleString()}`);
+  const returned = Number(counters['total.tokens_returned'] ?? 0);
+  if (returned > 0) lines.push('', `queries so far returned ${returned.toLocaleString()} tokens`);
 
   return textResult(lines.join('\n'));
 }
@@ -388,9 +391,3 @@ function parseLocation(q) {
   return { path: normalizePath(m[1]), start: Number(m[2]), end: m[3] ? Number(m[3]) : Number(m[2]) };
 }
 
-function grepBaseline(store, hits) {
-  const paths = [...new Set(hits.map((h) => h.node.path))];
-  if (!paths.length) return 0;
-  const holes = paths.map(() => '?').join(',');
-  return store.get(`SELECT COALESCE(SUM(tok),0) n FROM files WHERE path IN (${holes})`, ...paths).n;
-}

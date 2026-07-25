@@ -16,24 +16,27 @@ about 300 tokens.
 `cgraph` builds a persistent, queryable graph of your codebase and serves it
 over MCP, so the agent asks structural questions and gets exact, minimal answers.
 
-## Measured savings
+## What it costs to ask
 
-Benchmarked with `npm run bench`, which compares each answer against a fair
-simulation of grep-then-read — because an agent cannot act on grep output alone,
-it opens the files those hits point to.
+cgraph does not publish a token-savings multiplier. Any such number depends
+entirely on what the alternative is assumed to be — how many files a particular
+agent would have opened, with how much context — and that assumption does more
+work than the measurement. Numbers built that way flatter the tool rather than
+inform you.
 
-| Question | cgraph | grep + read | saving |
-|---|---:|---:|---:|
-| What's in this repo? | 9.7k | 446k | **46x** |
-| Where is `X` defined? | 725 | 436k | **601x** |
-| Who calls `X`? | 1.9k | 563k | **300x** |
-| What breaks if I change `X`? | 7.1k | 576k | **81x*** |
-| What do we use from `<dep>`? | 36 | 39k | **1091x** |
+What can be stated plainly is the size of the answers, measured on this
+repository:
 
-*Median **81x**, aggregate **63x** on llama.cpp (3,245 files, 727k LOC).
-Median **62x** on this repository.*
+| Question | Response |
+|---|---:|
+| Outline of a 123-line file | ~110 tokens (the file itself is ~1.4k) |
+| Locate a symbol by name | ~30 tokens |
+| Read one function | ~50-200 tokens |
+| Everything affected by changing a symbol | ~100-3k tokens, depending on reach |
 
-\* grep cannot actually answer this one; the baseline is a generous approximation.
+Every response reports its own token count, and `--budget` caps it. Whether that
+beats your current workflow is a question about your workflow — measure it on
+your own repository rather than trusting a headline from mine.
 
 ## Install
 
@@ -75,7 +78,7 @@ cgraph index [--force]   Build or rebuild the index
 cgraph update            Re-index only what changed
 cgraph watch             Keep the index fresh automatically
 cgraph doctor            Resolution quality and coverage gaps
-cgraph stats             Cumulative token savings
+cgraph stats             Index size and what queries have cost
 cgraph packs             Inspect or scaffold language packs
 ```
 
@@ -83,16 +86,20 @@ cgraph packs             Inspect or scaffold language packs
 
 ```console
 $ cgraph map src/core/tokens.js
-src/core/tokens.js  L123 ~1.4k
+src/core/tokens.js  L137 ~1.7k
   15 k const CHARS_PER_TOKEN = 3.6
   25 f function estimate(text)
   75 f function fitToBudget(lines, budget)
- 105 C class SavingsLedger
- 106 m   constructor(store)
- 110 m   record(tool, returned, baseline)
+ 118 C class UsageLedger
+ 119 m   constructor(store)
+ 129 m   record(tool, returned, source = 0)
 
-~112 tokens  ·  1314 saved vs reading this file
+~189 tokens  ·  file ~1.7k
 ```
+
+Both numbers are measured. The difference is left for you to interpret: whether
+you would otherwise have read the whole file is a fact about your workflow, not
+something cgraph can observe.
 
 ```console
 $ cgraph graph estimate --dir impact
@@ -382,7 +389,7 @@ git clone https://github.com/Ramachandrajoshi/Code-Graph.git
 cd Code-Graph
 npm install
 npm test          # 231 tests
-npm run bench     # token savings vs grep+read
+npm run bench     # response sizes (regression guard)
 ```
 
 ## License

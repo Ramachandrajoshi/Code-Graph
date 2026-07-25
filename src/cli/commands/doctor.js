@@ -180,14 +180,13 @@ function render(r) {
     out(color.dim('  (repeated names here usually mean a missing builtin list or import form)'));
   }
 
-  // -- savings
-  const saved = Number(r.counters['total.tokens_saved'] ?? 0);
-  if (saved > 0) {
-    const returned = Number(r.counters['total.tokens_returned'] ?? 0);
-    const baseline = Number(r.counters['total.tokens_baseline'] ?? 0);
-    const factor = returned > 0 ? (baseline / returned).toFixed(1) : '—';
+  // -- query cost
+  const returned = Number(r.counters['total.tokens_returned'] ?? 0);
+  if (returned > 0) {
+    // Reported as a measured cost, not as a saving. Claiming a saving would
+    // require asserting what some other workflow would have spent.
     out('');
-    out(`  tokens saved: ${saved.toLocaleString()}  (${factor}x reduction across ${r.counters['total.tokens_returned'] ? 'all queries' : 'none'})`);
+    out(`  queries so far returned ${returned.toLocaleString()} tokens`);
   }
 
   out('');

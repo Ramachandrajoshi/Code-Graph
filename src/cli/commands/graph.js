@@ -11,7 +11,7 @@ import { Store } from '../../core/store.js';
 import { findSymbol } from '../../core/retrieve.js';
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../../core/graph.js';
 import { degree } from '../../core/rank.js';
-import { SavingsLedger, fitToBudget } from '../../core/tokens.js';
+import { UsageLedger, fitToBudget } from '../../core/tokens.js';
 import { out, json, color } from '../ui.js';
 
 export async function run(args) {
@@ -62,7 +62,7 @@ export async function run(args) {
     for (const line of fitted.lines) out(line);
     if (fitted.dropped) out(color.dim(`... ${fitted.dropped} more (raise --budget)`));
 
-    new SavingsLedger(store).record('graph', fitted.tokens, 0);
+    new UsageLedger(store).record('graph', fitted.tokens, 0);
     if (!args.quiet) {
       out('');
       out(color.dim(`~${fitted.tokens} tokens`));

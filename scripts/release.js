@@ -59,17 +59,27 @@ function run(cmd, args, opts = {}) {
  * Invoke npm.
  *
  * On Windows `npm` is `npm.cmd`, a batch shim rather than an executable, so
- * execFileSync('npm', ...) fails with ENOENT. Since the fix for CVE-2024-27980,
- * Node also refuses to spawn .cmd or .bat without a shell at all, so naming
- * npm.cmd explicitly is not enough either — a shell is required.
+ * execFileSync('npm', ...) fails with ENOENT. Since the fix for CVE-2024-27980
+ * Node also refuses to spawn .cmd or .bat without a shell, so naming npm.cmd
+ * explicitly does not help either.
  *
- * `git` works without any of this because git.exe is a real binary, which is
- * why this bug hid until the script reached its first npm call.
+ * `git` needs none of this because git.exe is a real binary — which is why the
+ * bug stayed hidden until preflight got past its git checks.
  *
- * Arguments are validated above rather than escaped here: the set of things
- * this script passes to npm is small and closed.
+ * The fix avoids the shell rather than quoting around it. npm sets
+ * `npm_execpath` to its own CLI entry point when running a script, so npm can
+ * be executed as plain JavaScript through the current Node binary: no .cmd, no
+ * shell, and no DEP0190 warning about unescaped arguments.
+ *
+ * The shell path is kept only for the case where this script is run directly
+ * rather than through `npm run`. Arguments are validated above, so that path is
+ * closed even though it should never be taken.
  */
 function runNpm(args, opts = {}) {
+  const npmCli = process.env.npm_execpath;
+  if (npmCli && npmCli.endsWith('.js')) {
+    return run(process.execPath, [npmCli, ...args], opts);
+  }
   if (process.platform === 'win32') {
     return run('npm.cmd', args, { shell: true, ...opts });
   }

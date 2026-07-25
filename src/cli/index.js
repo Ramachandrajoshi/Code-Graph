@@ -32,7 +32,8 @@ ${color.bold('USAGE')}
   cgraph <command> [options]
 
 ${color.bold('SETUP')}
-  init                 Index this project and register the MCP server
+  init                 Index, register MCP, write agent instructions
+                       ${color.dim('--agent claude|copilot|opencode|cursor|windsurf|all')}
   index [--force]      Build or rebuild the index
   update               Re-index only what changed
   watch                Keep the index fresh as files change
@@ -62,7 +63,9 @@ Run ${color.cyan('cgraph <command> --help')} for command-specific options.
 
 export async function main(argv) {
   const args = parseArgs(argv, {
-    strings: ['root', 'path', 'lang', 'kind', 'mode', 'dir', 'symbol', 'package', 'q'],
+    // `agent` must consume a value, or `--agent claude` parses 'claude' as a
+    // positional and the flag silently becomes `true`.
+    strings: ['root', 'path', 'lang', 'kind', 'mode', 'dir', 'symbol', 'package', 'q', 'agent', 'grammar', 'to'],
     numbers: ['budget', 'depth', 'limit', 'top', 'workers'],
     alias: { h: 'help', v: 'version', q: 'query' },
   });

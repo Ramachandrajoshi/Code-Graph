@@ -43,9 +43,10 @@ cd your-project
 cgraph init
 ```
 
-`init` indexes the project, writes `.cgraph/`, adds it to `.gitignore`, and
-registers the MCP server in whatever agent configs it finds (`.mcp.json`,
-`.cursor/mcp.json`, `.vscode/mcp.json`, `.windsurf/mcp.json`).
+`init` indexes the project, writes `.cgraph/`, adds it to `.gitignore`,
+registers the MCP server with whatever agents it detects, and writes an
+instruction block telling them to use it instead of grep. See
+[Connecting your agent](#connecting-your-agent).
 
 Requires **Node >= 22.13**. No native compilation, no build step, no database to
 run — the index is SQLite via Node's built-in `node:sqlite`.
@@ -103,6 +104,73 @@ direct:
 2 hops:
   src/packs/registry.js::parseBatch      src/packs/registry.js:128
 ```
+
+## Connecting your agent
+
+```bash
+cgraph init                          # detect what this project uses
+cgraph init --agent claude           # or name them
+cgraph init --agent copilot,opencode
+cgraph init --agent all
+```
+
+Two things happen per agent: the MCP server is registered, and an instruction
+block is written telling the agent to prefer these tools over grep. **Both
+matter.** An agent with the tools available but no guidance keeps reaching for
+grep, because that is what its training says to do.
+
+| Agent | MCP config | Key | Instructions |
+|---|---|---|---|
+| Claude Code | `.mcp.json` | `mcpServers` | `CLAUDE.md` |
+| GitHub Copilot | `.vscode/mcp.json` | `servers` | `.github/copilot-instructions.md` |
+| opencode | `opencode.json` | `mcp` | `AGENTS.md` |
+| Cursor | `.cursor/mcp.json` | `mcpServers` | `AGENTS.md` |
+| Windsurf | `.windsurf/mcp.json` | `mcpServers` | `AGENTS.md` |
+
+These formats genuinely differ, and getting one wrong fails silently — VS Code
+uses `servers` rather than `mcpServers`, and opencode takes a single `command`
+array instead of `command` + `args`. `init` writes the right shape for each.
+
+**Without `--agent`**, only agents the project shows evidence of are wired up,
+plus Claude Code (`.mcp.json` is the portable default several tools read).
+Directories are never created for agents you don't use. **With `--agent`**,
+naming an agent is the evidence — it gets set up regardless.
+
+Restart your agent afterwards to pick up the server.
+
+### What gets written
+
+Existing entries are never overwritten, files that aren't valid JSON are left
+untouched, and re-running updates the instruction block in place rather than
+appending a second copy. Your own content in `CLAUDE.md` or `AGENTS.md` is
+preserved — the block lives between `<!-- cgraph:start -->` markers.
+
+```bash
+cgraph init --no-instructions   # register MCP only
+cgraph init --no-mcp            # index only, touch no agent files
+```
+
+### Manual setup
+
+If your agent isn't listed, register it as a stdio MCP server:
+
+```json
+{ "command": "cgraph", "args": ["serve", "--root", "/absolute/path/to/repo"] }
+```
+
+`--root` is not optional in practice: agents launch MCP servers with an
+unpredictable working directory, and without it the server resolves whichever
+index happens to be nearest.
+
+### Verifying the connection
+
+```bash
+cgraph serve --root .    # should print "serving <path> (N symbols)" to stderr
+cgraph status            # index freshness and stats
+```
+
+If the agent connects but never uses the tools, check that the instruction file
+landed — that is usually the missing half.
 
 ## Honest by construction
 

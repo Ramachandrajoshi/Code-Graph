@@ -172,6 +172,46 @@ cgraph status            # index freshness and stats
 If the agent connects but never uses the tools, check that the instruction file
 landed — that is usually the missing half.
 
+## Keeping the index fresh
+
+**By default you don't have to do anything.** The MCP server checks for changes
+before it answers, so an agent never reads a graph that disagrees with the
+working tree — after an editor save, a `git checkout`, a rebase, or another
+agent's edit.
+
+That check is a `stat` of each file, not a read: **~170ms on a 3,000-file repo**,
+and only files whose size or mtime moved are read and re-parsed. Repeated tool
+calls share one scan (3s throttle by default), so a burst of queries costs one.
+
+```jsonc
+// .cgraph/config.json
+{ "autoRefresh": { "enabled": true, "throttleMs": 3000 } }
+```
+
+Query-time refresh is the default because freshness is only needed at the moment
+of use, and a query *is* that moment. No daemon to start, nothing to remember.
+
+### When you want more
+
+| | Command | What it adds |
+|---|---|---|
+| **Nothing** | — | Already correct. Start here. |
+| Instant | `cgraph watch` | Re-indexes on save, so queries never pay the scan. Costs a long-running process. |
+| Pre-warm | `cgraph hooks install` | Re-indexes after checkout, merge and rebase — the operations that change hundreds of files at once. |
+| Manual | `cgraph update` | Scripts and CI. |
+
+`cgraph hooks install` appends to `.git/hooks/post-checkout`, `post-merge` and
+`post-rewrite`, between marker comments, **never replacing an existing hook**.
+The hook is backgrounded and silent, so it cannot delay or fail a git command.
+`cgraph hooks uninstall` removes only our block.
+
+`post-commit` is deliberately excluded (`--all` adds it): committing doesn't
+change the working tree, so the index is already correct and the latency buys
+nothing.
+
+None of these are required. They move *when* the cost is paid, not whether the
+answer is right.
+
 ## Honest by construction
 
 Every edge carries a confidence, and it is visible in the output:

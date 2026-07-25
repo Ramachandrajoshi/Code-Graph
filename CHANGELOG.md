@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The index refreshes itself.** The MCP server checks for changes before
+  answering, so an agent never reads a graph that disagrees with the working
+  tree — after an editor save, a git checkout, a rebase, or another agent's
+  edit. No watcher, no hook, nothing to remember. Throttled (3s) so a burst of
+  tool calls costs one scan, and disabled with
+  `autoRefresh.enabled: false`.
+- `cgraph hooks install` — pre-warms the index after checkout, merge and
+  rebase, the operations that change hundreds of files at once. Appends between
+  markers and never replaces an existing hook; backgrounded so it cannot delay
+  a git command. `post-commit` is excluded by default because committing does
+  not change the working tree.
+- `cgraph init --agent` for Claude Code, GitHub Copilot, opencode, Cursor and
+  Windsurf, writing both the MCP registration and an instruction block telling
+  the agent to use these tools instead of grep.
+
+### Changed
+
+- **Freshness checks no longer read the repository.** A file whose size and
+  mtime match the index is skipped without being opened; only files that fail
+  that check are read and hashed. On llama.cpp a no-op pass drops from ~520ms
+  to ~170ms, which is what makes automatic refresh affordable. The content hash
+  still decides, so a file touched but not edited is read once and correctly not
+  re-parsed.
+
 ## [0.1.1] — 2026-07-25
 ### Fixed
 

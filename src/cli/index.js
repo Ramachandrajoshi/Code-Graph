@@ -23,6 +23,7 @@ const COMMANDS = {
   doctor: () => import('./commands/doctor.js'),
   serve: () => import('./commands/serve.js'),
   watch: () => import('./commands/watch.js'),
+  hooks: () => import('./commands/hooks.js'),
 };
 
 const HELP = `
@@ -37,6 +38,7 @@ ${color.bold('SETUP')}
   index [--force]      Build or rebuild the index
   update               Re-index only what changed
   watch                Keep the index fresh as files change
+  hooks                Pre-warm the index on git checkout/merge/rebase
 
 ${color.bold('RETRIEVAL')}
   map [path]           Hierarchical outline          (replaces ls / glob)

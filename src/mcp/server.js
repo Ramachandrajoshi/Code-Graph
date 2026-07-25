@@ -27,6 +27,7 @@ export async function createServer({ root, version }) {
   const config = loadConfig(root ?? process.cwd(), root ? { root } : {});
   const store = await Store.open(config.db, { create: false });
   const ledger = new SavingsLedger(store);
+  const refresher = new Refresher(store, config);
 
   const handlers = {
     async listTools() {
@@ -35,13 +36,17 @@ export async function createServer({ root, version }) {
 
     async callTool(name, args) {
       try {
+        // Refresh before answering, so the agent never reads a graph that
+        // disagrees with the working tree. `status` does its own, explicitly.
+        if (name !== 'status') await refresher.maybe();
+
         switch (name) {
           case 'map':    return toolMap(store, config, args, ledger);
           case 'find':   return toolFind(store, config, args, ledger);
           case 'read':   return toolRead(store, config, args, ledger);
           case 'graph':  return toolGraph(store, config, args, ledger);
           case 'docs':   return toolDocs(store, config, args);
-          case 'status': return await toolStatus(store, config, args);
+          case 'status': return await toolStatus(store, config, args, refresher);
           case 'similar': return await toolSimilar(store, config, args);
           default:
             return errorResult(`Unknown tool '${name}'.`);
@@ -53,7 +58,76 @@ export async function createServer({ root, version }) {
   };
 
   const server = new StdioServer({ name: 'cgraph', version, handlers });
-  return { server, store, config };
+  return { server, store, config, refresher };
+}
+
+/**
+ * Keeps the index current, cheaply, without a watcher process.
+ *
+ * The agent's own queries are the trigger. That is a better signal than a
+ * timer: freshness is only needed at the moment of use, and a query is exactly
+ * that moment. No daemon to start, nothing to remember, and correct after any
+ * change — an editor save, a git checkout, a rebase, another agent's edit.
+ *
+ * Three properties make it affordable:
+ *   - the scan is a stat per file, not a read (~170ms on 3,000 files)
+ *   - it is throttled, so a burst of tool calls costs one scan
+ *   - the pack registry is loaded once, not per refresh
+ */
+class Refresher {
+  constructor(store, config) {
+    this.store = store;
+    this.config = config;
+    this.registry = null;
+    this.lastCheck = 0;
+    this.inFlight = null;
+  }
+
+  async maybe() {
+    if (this.config.autoRefresh?.enabled === false) return null;
+
+    // Concurrent tool calls share one refresh rather than racing to index the
+    // same files into the same tables.
+    if (this.inFlight) return this.inFlight;
+
+    const throttle = this.config.autoRefresh?.throttleMs ?? 3000;
+    if (Date.now() - this.lastCheck < throttle) return null;
+
+    this.inFlight = this._run().finally(() => {
+      this.lastCheck = Date.now();
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
+
+  /** Force a refresh regardless of throttle. Used by `status`. */
+  async now() {
+    this.lastCheck = 0;
+    return (await this.maybe()) ?? null;
+  }
+
+  async _run() {
+    try {
+      const { Indexer } = await import('../core/indexer.js');
+      const { PackRegistry } = await import('../packs/registry.js');
+      this.registry ??= await PackRegistry.load(this.config);
+
+      return await new Indexer({
+        store: this.store, config: this.config, registry: this.registry,
+      }).run({});
+    } catch (err) {
+      // A refresh failure must never take down a query. The agent gets the
+      // previous index, which is worse than fresh but far better than an error,
+      // and the reason is on stderr for a human to find.
+      process.stderr.write(`[cgraph] refresh failed: ${err.message}\n`);
+      return null;
+    }
+  }
+
+  dispose() {
+    this.registry?.dispose();
+    this.registry = null;
+  }
 }
 
 // ---------------------------------------------------------------- tools
@@ -232,18 +306,19 @@ function toolDocs(store, config, args) {
   return textResult(result.lines.join('\n'));
 }
 
-async function toolStatus(store, config, args) {
+async function toolStatus(store, config, args, refresher) {
   const refresh = args.refresh !== false;
   const lines = [];
 
   if (refresh) {
-    const { Indexer } = await import('../core/indexer.js');
-    const { PackRegistry } = await import('../packs/registry.js');
-    const registry = await PackRegistry.load(config);
-    const stats = await new Indexer({ store, config, registry }).run({});
-    registry.dispose();
+    // Bypasses the throttle: asking for status is an explicit request for the
+    // current truth. Reuses the shared registry rather than reloading every
+    // grammar, which the previous per-call load did.
+    const stats = await refresher.now();
 
-    if (stats.added || stats.changed || stats.removed) {
+    if (!stats) {
+      lines.push('auto-refresh is disabled; showing the index as last built');
+    } else if (stats.added || stats.changed || stats.removed) {
       lines.push(`refreshed: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed`);
     } else {
       lines.push('index is up to date');

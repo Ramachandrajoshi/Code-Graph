@@ -35,6 +35,7 @@ export async function run(args) {
   );
 
   const shutdown = () => {
+    try { ctx.refresher?.dispose(); } catch { /* never loaded */ }
     try { ctx.store.close(); } catch { /* already closed */ }
     process.exit(0);
   };

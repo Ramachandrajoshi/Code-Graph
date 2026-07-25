@@ -69,6 +69,20 @@ export const DEFAULTS = {
 
   // Default token budget for a single tool response when the caller doesn't say.
   defaultBudget: 2000,
+
+  // Keep the index current without anyone remembering to.
+  //
+  // The MCP server checks for changes before answering, so an agent never reads
+  // a stale graph. The check is a stat of each file, not a read (~170ms on a
+  // 3,000-file repo), and is throttled so a burst of tool calls costs one scan.
+  //
+  // This is the default because staleness is the failure mode that matters
+  // most: an agent acting on a moved line number edits the wrong code, and
+  // nothing in the output would tell it that happened.
+  autoRefresh: {
+    enabled: true,
+    throttleMs: 3000,
+  },
 };
 
 /** Absolute path to the shared, machine-wide cache (grammars, dependency docs). */

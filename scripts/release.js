@@ -32,8 +32,48 @@ const preidIndex = argv.indexOf('--preid');
 const preid = preidIndex !== -1 ? argv[preidIndex + 1] : 'beta';
 const bump = argv.find((a) => !a.startsWith('--') && a !== preid) ?? 'patch';
 
+const BUMPS = new Set([
+  'patch', 'minor', 'major', 'prepatch', 'preminor', 'premajor', 'prerelease',
+]);
+
+// Validate before anything reaches a shell. On Windows npm must be invoked
+// through one (see runNpm), so unvalidated input would be a command-injection
+// hole in a script that pushes tags and publishes packages.
+if (!BUMPS.has(bump) && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(bump)) {
+  process.stderr.write(
+    `\n  error: invalid bump '${bump}'.\n` +
+    `  Use one of: ${[...BUMPS].join(', ')}, or an exact version like 1.2.3\n\n`
+  );
+  process.exit(1);
+}
+if (!/^[0-9A-Za-z.-]+$/.test(preid)) {
+  process.stderr.write(`\n  error: invalid --preid '${preid}'.\n\n`);
+  process.exit(1);
+}
+
 function run(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', ...opts }).trim();
+}
+
+/**
+ * Invoke npm.
+ *
+ * On Windows `npm` is `npm.cmd`, a batch shim rather than an executable, so
+ * execFileSync('npm', ...) fails with ENOENT. Since the fix for CVE-2024-27980,
+ * Node also refuses to spawn .cmd or .bat without a shell at all, so naming
+ * npm.cmd explicitly is not enough either — a shell is required.
+ *
+ * `git` works without any of this because git.exe is a real binary, which is
+ * why this bug hid until the script reached its first npm call.
+ *
+ * Arguments are validated above rather than escaped here: the set of things
+ * this script passes to npm is small and closed.
+ */
+function runNpm(args, opts = {}) {
+  if (process.platform === 'win32') {
+    return run('npm.cmd', args, { shell: true, ...opts });
+  }
+  return run('npm', args, opts);
 }
 
 function step(message) {
@@ -89,8 +129,10 @@ const pkgPath = path.join(ROOT, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 const currentVersion = pkg.version;
 
-// Compute the next version without writing anything yet.
-const nextVersion = run('npm', [
+// Compute the next version without writing anything yet. `npm version` is used
+// rather than hand-rolled semver because it also keeps package-lock.json in
+// step, and getting a version wrong here produces an immutable bad publish.
+const nextVersion = runNpm([
   'version', bump,
   ...(bump.startsWith('pre') ? ['--preid', preid] : []),
   '--no-git-tag-version', '--no-commit-hooks',
@@ -109,21 +151,25 @@ if (run('git', ['tag', '-l', `v${nextVersion}`])) {
   );
 }
 
-try {
-  run('npm', ['view', `cgraph@${nextVersion}`, 'version']);
+// Asked of the registry directly rather than through `npm view`. One less
+// process to spawn, and an unambiguous answer: 404 means unpublished, whereas
+// npm exits non-zero for that *and* for network failures, offline mode, and
+// auth problems — all of which would read as "safe to publish".
+const published = await registryHas(nextVersion);
+if (published === true) {
   fail(
     `cgraph@${nextVersion} is already on npm.`,
     'Published versions are immutable. Bump to a new version.'
   );
-} catch (err) {
-  // A non-zero exit is the expected, healthy case: the version is unpublished.
-  if (String(err.stdout ?? '').includes(nextVersion)) throw err;
+} else if (published === null) {
+  step('version is unpublished  (could not reach the registry; CI will re-check)');
+} else {
+  step('version is unpublished');
 }
-step('version is unpublished');
 
 process.stdout.write('\n  Verification\n');
 try {
-  run('npm', ['test'], { stdio: 'inherit' });
+  runNpm(['test'], { stdio: 'inherit' });
 } catch {
   fail('tests failed.', 'A release must be green.');
 }
@@ -157,7 +203,7 @@ if (!/^y(es)?$/i.test(answer.trim())) {
 
 process.stdout.write('\n  Releasing\n');
 
-run('npm', ['version', nextVersion, '--no-git-tag-version', '--no-commit-hooks']);
+runNpm(['version', nextVersion, '--no-git-tag-version', '--no-commit-hooks']);
 step('package.json bumped');
 
 updateChangelog(nextVersion);
@@ -182,6 +228,30 @@ process.stdout.write(`
   Release:   ${REPO}/releases/tag/v${nextVersion}
 
 `);
+
+/**
+ * Is this version already on the registry?
+ *
+ * Returns true (published), false (not published), or null (could not tell).
+ * The three-way answer matters: treating an unreachable registry as "not
+ * published" would let a release proceed on a guess, and treating it as
+ * "published" would block releases whenever someone is offline. Saying
+ * "unknown" and deferring to the CI check is the honest option, and CI re-runs
+ * this check with network access before anything is published.
+ */
+async function registryHas(version) {
+  try {
+    const res = await fetch(`https://registry.npmjs.org/cgraph/${version}`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.status === 404) return false;
+    if (res.ok) return true;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Promote the Unreleased section to the new version and open a fresh one.

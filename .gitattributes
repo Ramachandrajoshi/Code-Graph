@@ -1,0 +1,44 @@
+# Normalize line endings.
+#
+# Everything text is stored as LF in the repository and checked out as LF
+# everywhere, including Windows. This is not cosmetic:
+#
+#   - `bin/cgraph.js` carries a shebang. Checked out with CRLF on Linux or
+#     macOS, `#!/usr/bin/env node\r` is not a valid interpreter path and the
+#     binary fails to execute at all.
+#   - The extractor records byte offsets into source files. Line endings that
+#     differ between the indexing machine and the reading machine would shift
+#     every offset in the file.
+#   - Without this, Windows contributors produce diffs where every line appears
+#     changed, which makes review impossible.
+
+* text=auto eol=lf
+
+# Explicit for the file types this project actually contains.
+*.js       text eol=lf
+*.mjs      text eol=lf
+*.cjs      text eol=lf
+*.json     text eol=lf
+*.md       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.scm      text eol=lf
+*.txt      text eol=lf
+LICENSE    text eol=lf
+NOTICE     text eol=lf
+.gitignore text eol=lf
+
+# Binary: never convert, never diff.
+*.wasm     binary
+*.db       binary
+*.png      binary
+*.jpg      binary
+*.gif      binary
+*.ico      binary
+*.tgz      binary
+
+# Keep generated and vendored files out of language statistics and diffs.
+package-lock.json  linguist-generated=true -diff
+
+# Tree-sitter queries are Scheme-like; GitHub does not detect them.
+*.scm  linguist-language=Scheme

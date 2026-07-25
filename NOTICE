@@ -1,0 +1,37 @@
+code-graph
+Copyright 2026 Ramachandra Joshi
+
+This product includes software developed by Ramachandra Joshi.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+This software depends on, and at runtime downloads, the following third-party
+components. They are not redistributed as part of this package.
+
+web-tree-sitter
+  Copyright (c) 2018-2024 Max Brunsfeld
+  Licensed under the MIT License.
+  https://github.com/tree-sitter/tree-sitter
+
+ignore
+  Copyright (c) 2013 Kael Zhang and contributors
+  Licensed under the MIT License.
+  https://github.com/kaelzhang/node-ignore
+
+tree-sitter-wasms (optional dependency)
+  Prebuilt WebAssembly builds of tree-sitter language grammars.
+  Licensed under the MIT License.
+  https://github.com/sourcegraph/tree-sitter-wasms
+
+  Individual grammars carry their own licenses (predominantly MIT and
+  Apache-2.0) held by their respective authors. When a grammar is not present
+  locally, code-graph downloads it on demand from the npm CDN into a
+  machine-wide cache and verifies it against a pinned SHA-256 digest.

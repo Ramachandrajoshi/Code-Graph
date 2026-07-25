@@ -1,0 +1,81 @@
+{
+  "name": "code-graph",
+  "version": "0.1.0",
+  "description": "Token-efficient code retrieval for AI agents. Builds a queryable graph of your codebase and serves it over MCP, so agents stop burning context on grep and whole-file reads.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Ramachandra Joshi <ramueargoppa@gmail.com>",
+  "homepage": "https://github.com/Ramachandrajoshi/Code-Graph#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ramachandrajoshi/Code-Graph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ramachandrajoshi/Code-Graph/issues"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "cgraph": "./bin/cgraph.js",
+    "code-graph": "./bin/cgraph.js"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./sdk": "./src/sdk/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:watch": "node --test --watch \"test/**/*.test.js\"",
+    "bench": "node bench/run.js",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "ignore": "^7.0.5",
+    "web-tree-sitter": "~0.25.10"
+  },
+  "peerDependencies": {
+    "tree-sitter-wasms": "^0.1.13"
+  },
+  "peerDependenciesMeta": {
+    "tree-sitter-wasms": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "tree-sitter-wasms": "^0.1.13"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "agent",
+    "claude",
+    "cursor",
+    "copilot",
+    "tokens",
+    "context",
+    "code-search",
+    "code-graph",
+    "knowledge-graph",
+    "call-graph",
+    "impact-analysis",
+    "tree-sitter",
+    "static-analysis",
+    "codebase-indexing",
+    "developer-tools"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

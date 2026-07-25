@@ -108,8 +108,87 @@ test('fromConfig reports a missing API key by env var name', () => {
 test('an unknown provider is rejected with the known list', () => {
   assert.throws(
     () => new Embedder({ provider: 'nope', apiKey: 'x' }),
-    /Known: voyage, openai/
+    /Known: voyage, openai, local/
   );
+});
+
+// ------------------------------------------------- local / OpenAI-compatible
+
+test('a local provider needs a baseUrl', () => {
+  // There is no sensible default endpoint for a server we know nothing about,
+  // and guessing localhost:11434 would fail confusingly for LM Studio users.
+  assert.throws(
+    () => Embedder.fromConfig({
+      embeddings: { enabled: true, provider: 'local', model: 'nomic-embed-text' },
+    }),
+    /baseUrl is not set/
+  );
+});
+
+test('a local provider needs a model', () => {
+  assert.throws(
+    () => Embedder.fromConfig({
+      embeddings: { enabled: true, provider: 'local', baseUrl: 'http://localhost:11434/v1' },
+    }),
+    /embeddings.model is required/
+  );
+});
+
+test('a local provider does not require an API key', () => {
+  // Most local servers have no auth at all; demanding a token would be pure
+  // friction for the case this provider exists to serve.
+  const e = Embedder.fromConfig({
+    embeddings: {
+      enabled: true, provider: 'local',
+      baseUrl: 'http://localhost:11434/v1', model: 'nomic-embed-text',
+    },
+  });
+  assert.equal(e.model, 'nomic-embed-text');
+  assert.equal(e.apiKey, undefined);
+});
+
+test('baseUrl is accepted in the forms people paste from a README', () => {
+  const url = (baseUrl) => Embedder.fromConfig({
+    embeddings: { enabled: true, provider: 'local', baseUrl, model: 'm' },
+  }).url;
+
+  assert.equal(url('http://localhost:11434/v1'), 'http://localhost:11434/v1/embeddings');
+  assert.equal(url('http://localhost:11434/v1/'), 'http://localhost:11434/v1/embeddings');
+  assert.equal(url('http://localhost:11434'), 'http://localhost:11434/v1/embeddings');
+  assert.equal(url('http://localhost:1234/v1/embeddings'), 'http://localhost:1234/v1/embeddings',
+    'a full endpoint is left alone');
+});
+
+test('dimensions are carried into the request only when set', () => {
+  const withDims = Embedder.fromConfig({
+    embeddings: {
+      enabled: true, provider: 'local', baseUrl: 'http://x/v1', model: 'm', dimensions: 768,
+    },
+  });
+  assert.equal(withDims.dimensions, 768);
+  const body = withDims.spec.build(['a'], 'm', { dimensions: 768 });
+  assert.equal(body.dimensions, 768);
+
+  // Many local servers reject an unexpected `dimensions` field outright rather
+  // than ignoring it, so it must be absent when not configured.
+  const without = Embedder.fromConfig({
+    embeddings: { enabled: true, provider: 'local', baseUrl: 'http://x/v1', model: 'm' },
+  });
+  assert.equal('dimensions' in without.spec.build(['a'], 'm', {}), false);
+});
+
+test('a local API key is read from the environment when present', () => {
+  process.env.CGRAPH_EMBEDDING_API_KEY = 'local-secret';
+  try {
+    const e = Embedder.fromConfig({
+      embeddings: { enabled: true, provider: 'local', baseUrl: 'http://x/v1', model: 'm' },
+    });
+    assert.equal(e.apiKey, 'local-secret');
+    assert.deepEqual(e.spec.auth('local-secret'), { Authorization: 'Bearer local-secret' });
+    assert.deepEqual(e.spec.auth(undefined), {}, 'no key means no auth header at all');
+  } finally {
+    delete process.env.CGRAPH_EMBEDDING_API_KEY;
+  }
 });
 
 test('the API key is never stored in config, only its env var name', () => {

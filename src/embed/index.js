@@ -11,35 +11,75 @@
  * the NAME of the environment variable holding it.
  */
 
-/** Providers we know how to call. Each maps to a plain HTTP request. */
+/**
+ * Providers we know how to call. Each maps to a plain HTTP request.
+ *
+ * `local` is the escape hatch for anything speaking the OpenAI embeddings API:
+ * Ollama, LM Studio, llama.cpp's server, vLLM, text-embeddings-inference, or a
+ * self-hosted gateway. It requires `baseUrl` and `model` because there is no
+ * sensible default for a server we know nothing about, and it does not require
+ * an API key because most local servers have none.
+ */
 const PROVIDERS = {
   voyage: {
     url: 'https://api.voyageai.com/v1/embeddings',
     defaultModel: 'voyage-code-3',
-    build: (texts, model) => ({ input: texts, model, input_type: 'document' }),
+    build: (texts, model, opts) => ({
+      input: texts, model, input_type: 'document',
+      ...(opts.dimensions ? { output_dimension: opts.dimensions } : {}),
+    }),
     parse: (json) => json.data.map((d) => d.embedding),
     auth: (key) => ({ Authorization: `Bearer ${key}` }),
+    requiresKey: true,
   },
   openai: {
     url: 'https://api.openai.com/v1/embeddings',
     defaultModel: 'text-embedding-3-small',
-    build: (texts, model) => ({ input: texts, model }),
+    build: (texts, model, opts) => ({
+      input: texts, model,
+      ...(opts.dimensions ? { dimensions: opts.dimensions } : {}),
+    }),
     parse: (json) => json.data.map((d) => d.embedding),
     auth: (key) => ({ Authorization: `Bearer ${key}` }),
+    requiresKey: true,
+  },
+  local: {
+    url: null,                 // supplied by baseUrl
+    defaultModel: null,        // no default: the server decides what it serves
+    build: (texts, model, opts) => ({
+      input: texts, model,
+      // Only sent when asked for. Many local servers reject an unexpected
+      // `dimensions` field outright rather than ignoring it, so a default here
+      // would break the common case.
+      ...(opts.dimensions ? { dimensions: opts.dimensions } : {}),
+    }),
+    parse: (json) => json.data.map((d) => d.embedding),
+    auth: (key) => (key ? { Authorization: `Bearer ${key}` } : {}),
+    requiresKey: false,
   },
 };
 
 export class Embedder {
-  constructor({ provider, model, apiKey }) {
+  constructor({ provider, model, apiKey, baseUrl, dimensions }) {
     const spec = PROVIDERS[provider];
     if (!spec) {
       throw new Error(
         `Unknown embedding provider '${provider}'. Known: ${Object.keys(PROVIDERS).join(', ')}`
       );
     }
+
     this.spec = spec;
     this.model = model ?? spec.defaultModel;
     this.apiKey = apiKey;
+    this.dimensions = dimensions ?? null;
+    this.url = resolveUrl(spec, baseUrl);
+
+    if (!this.model) {
+      throw new Error(
+        `embeddings.model is required for provider '${provider}'.\n` +
+        'A local server exposes whatever model it was started with; there is no default to guess.'
+      );
+    }
   }
 
   /**
@@ -53,36 +93,106 @@ export class Embedder {
     if (!e?.enabled) return null;
     if (!e.provider) throw new Error('embeddings.enabled is true but embeddings.provider is not set');
 
+    const spec = PROVIDERS[e.provider];
+    if (!spec) {
+      throw new Error(
+        `Unknown embedding provider '${e.provider}'. Known: ${Object.keys(PROVIDERS).join(', ')}`
+      );
+    }
+
+    if (e.provider === 'local' && !e.baseUrl) {
+      throw new Error(
+        'embeddings.provider is "local" but embeddings.baseUrl is not set.\n' +
+        'Point it at your server, e.g. "http://localhost:11434/v1" for Ollama.'
+      );
+    }
+
+    // A key is read from the environment for every provider, but only demanded
+    // where the service actually needs one. Requiring a token for a local
+    // server on localhost would be pointless friction.
     const envVar = e.apiKeyEnv ?? defaultEnvVar(e.provider);
-    const apiKey = process.env[envVar];
-    if (!apiKey) {
+    const apiKey = envVar ? process.env[envVar] : undefined;
+
+    if (spec.requiresKey && !apiKey) {
       throw new Error(
         `Embeddings are enabled but ${envVar} is not set.\n` +
           'The key is read from the environment; it is never stored in .cgraph/config.json.'
       );
     }
-    return new Embedder({ provider: e.provider, model: e.model, apiKey });
+
+    return new Embedder({
+      provider: e.provider,
+      model: e.model,
+      apiKey,
+      baseUrl: e.baseUrl,
+      dimensions: e.dimensions,
+    });
   }
 
   /** Embed a batch of texts. Batching matters: per-item requests are ~50x slower. */
   async embed(texts) {
-    const res = await fetch(this.spec.url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...this.spec.auth(this.apiKey) },
-      body: JSON.stringify(this.spec.build(texts, this.model)),
-      signal: AbortSignal.timeout(60000),
-    });
+    let res;
+    try {
+      res = await fetch(this.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...this.spec.auth(this.apiKey) },
+        body: JSON.stringify(this.spec.build(texts, this.model, { dimensions: this.dimensions })),
+        signal: AbortSignal.timeout(120000),
+      });
+    } catch (err) {
+      // A local server that is simply not running is by far the most common
+      // failure, and the raw fetch error ("fetch failed") says nothing useful.
+      throw new Error(
+        `Could not reach the embedding server at ${this.url}: ${err.message}\n` +
+        'Check it is running and that embeddings.baseUrl is correct.'
+      );
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      throw new Error(`Embedding request failed: ${res.status} ${res.statusText} ${detail.slice(0, 200)}`);
+      throw new Error(
+        `Embedding request failed: ${res.status} ${res.statusText} ${detail.slice(0, 300)}`
+      );
     }
-    return this.spec.parse(await res.json());
+
+    const vectors = this.spec.parse(await res.json());
+
+    // A server that silently returns a different width than configured would
+    // corrupt every similarity score, and the symptom — subtly wrong rankings —
+    // is nearly impossible to trace back here.
+    if (this.dimensions && vectors[0] && vectors[0].length !== this.dimensions) {
+      throw new Error(
+        `Model '${this.model}' returned ${vectors[0].length}-dimensional vectors ` +
+        `but embeddings.dimensions is ${this.dimensions}.\n` +
+        'Set dimensions to match the model, or remove it to accept whatever the model returns.'
+      );
+    }
+
+    return vectors;
   }
 }
 
+/**
+ * The endpoint to POST to.
+ *
+ * `baseUrl` is given the way these servers document themselves — with or
+ * without the `/v1`, with or without the full path — because every one of those
+ * forms gets pasted from a README.
+ */
+function resolveUrl(spec, baseUrl) {
+  if (!baseUrl) return spec.url;
+
+  const trimmed = String(baseUrl).replace(/\/+$/, '');
+  if (/\/embeddings$/.test(trimmed)) return trimmed;
+  if (/\/v\d+$/.test(trimmed)) return `${trimmed}/embeddings`;
+  return `${trimmed}/v1/embeddings`;
+}
+
 function defaultEnvVar(provider) {
-  return provider === 'voyage' ? 'VOYAGE_API_KEY' : 'OPENAI_API_KEY';
+  if (provider === 'voyage') return 'VOYAGE_API_KEY';
+  if (provider === 'openai') return 'OPENAI_API_KEY';
+  // Local servers usually have no auth; the variable is consulted if set.
+  return 'CGRAPH_EMBEDDING_API_KEY';
 }
 
 /**

@@ -29,7 +29,7 @@ export async function run(args) {
 }
 
 async function listPacks(config, args) {
-  const registry = await PackRegistry.load(config);
+  const registry = await PackRegistry.load(config, { allPacks: true });
   try {
     const local = localGrammars();
     const rows = [];

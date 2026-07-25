@@ -58,13 +58,28 @@ export const DEFAULTS = {
     maxPackages: 200,
   },
 
-  // Embeddings are opt-in and off by default: they cost money and ship code to a
-  // third party, which cuts against the point of the tool.
+  // Embeddings are opt-in and off by default: a hosted provider costs money and
+  // ships your code to a third party, which cuts against the point of the tool.
+  // A local model avoids both, which is why `provider: "local"` exists.
+  //
+  //   { "embeddings": {
+  //       "enabled": true,
+  //       "provider": "local",
+  //       "baseUrl": "http://localhost:11434/v1",   // Ollama; LM Studio is :1234/v1
+  //       "model": "nomic-embed-text",
+  //       "dimensions": 768                          // optional; verified on first batch
+  //   }}
+  //
+  // dimensions is optional. Set it and cgraph checks the server actually
+  // returns that width — a mismatch silently corrupts every similarity score,
+  // and the symptom (subtly wrong rankings) is near-impossible to trace back.
   embeddings: {
     enabled: false,
-    provider: null,
-    model: null,
-    apiKeyEnv: null,
+    provider: null,     // 'local' | 'openai' | 'voyage'
+    baseUrl: null,      // required for 'local'
+    model: null,        // required for 'local'; hosted providers have defaults
+    dimensions: null,
+    apiKeyEnv: null,    // env var holding the key; never the key itself
   },
 
   // Default token budget for a single tool response when the caller doesn't say.

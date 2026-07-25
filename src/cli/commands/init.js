@@ -52,6 +52,16 @@ export async function run(args) {
     stats = await new Indexer({ store, config, registry, progress }).run({});
     progress.done();
 
+    // What was detected drives which packs loaded and where dependency docs are
+    // read from, so showing it lets a wrong guess be spotted immediately rather
+    // than surfacing later as mysteriously missing symbols.
+    const tech = registry.technologies;
+    if (tech?.stacks?.length) {
+      const parts = [tech.stacks.join(', ')];
+      if (tech.frameworks.length) parts.push(tech.frameworks.join(', '));
+      out(`  detected  ${parts.join('  ·  ')}`);
+    }
+
     const s = store.stats();
     out(`  indexed   ${s.parsed} files, ${s.nodes} symbols, ${s.edges} edges`);
     out(`            ~${toks(s.tok)} tokens of source  ·  ${duration(stats.durationMs)}`);

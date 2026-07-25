@@ -16,6 +16,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { userCacheDir } from '../core/config.js';
 import { ParserHost } from '../core/parser-host.js';
@@ -142,7 +143,104 @@ function locate(pkg, config) {
     return null;
   }
 
+  if (pkg.ecosystem === 'nuget' || pkg.ecosystem === 'dotnet') return locateNuget(pkg);
+
   return null;
+}
+
+/**
+ * Find a NuGet package in the global package cache.
+ *
+ * NuGet ships compiled assemblies, not source, so there is no code to parse.
+ * What it does ship — when the author enabled documentation generation, which
+ * Microsoft's own packages always do — is an XML documentation file beside the
+ * DLL. That file contains every public member with its summary text, which is
+ * exactly the API surface `docs` wants and far cleaner than decompiled source.
+ */
+function locateNuget(pkg) {
+  const roots = [
+    process.env.NUGET_PACKAGES,
+    path.join(os.homedir(), '.nuget', 'packages'),
+  ].filter(Boolean);
+
+  // Package directories are lower-cased in the cache.
+  const name = pkg.package.toLowerCase();
+
+  for (const root of roots) {
+    const dir = path.join(root, name);
+    if (!fs.existsSync(dir)) continue;
+
+    // Highest version present. Without a lockfile to consult this is a guess,
+    // but a package's public API rarely moves between patch versions and the
+    // alternative is no documentation at all.
+    const versions = safeReaddir(dir)
+      .filter((v) => fs.existsSync(path.join(dir, v, 'lib')) || fs.existsSync(path.join(dir, v)))
+      .sort(compareVersions);
+    if (!versions.length) continue;
+
+    const version = versions.at(-1);
+    const xml = findNugetXmlDoc(path.join(dir, version));
+    if (xml) return { kind: 'nuget', file: xml, version };
+  }
+  return null;
+}
+
+/**
+ * The XML doc file for the most modern target framework available.
+ *
+ * A package carries one `lib/<tfm>/` directory per framework it supports, each
+ * with an identical API. Preferring the newest avoids documenting a
+ * .NET Framework 4.5 surface for a project on .NET 8.
+ */
+function findNugetXmlDoc(versionDir) {
+  const lib = path.join(versionDir, 'lib');
+  const entries = safeReaddir(lib);
+
+  const tfms = entries
+    .filter((e) => isDirectory(path.join(lib, e)))
+    .sort(compareTargetFrameworks);
+
+  for (const tfm of tfms.reverse()) {
+    const xml = safeReaddir(path.join(lib, tfm)).find((f) => f.toLowerCase().endsWith('.xml'));
+    if (xml) return path.join(lib, tfm, xml);
+  }
+
+  // Packages predating the target-framework convention put assemblies straight
+  // in lib/, so an entry there may be a file rather than a directory.
+  const flat = entries.find((f) => f.toLowerCase().endsWith('.xml'));
+  return flat ? path.join(lib, flat) : null;
+}
+
+function isDirectory(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+/** Newer target frameworks sort last: net8.0 > net6.0 > netstandard2.0 > net48. */
+function compareTargetFrameworks(a, b) {
+  const score = (tfm) => {
+    const m = tfm.match(/^net(?:coreapp)?(\d+)\.(\d+)/);
+    if (m) return 3000 + Number(m[1]) * 10 + Number(m[2]);
+    const std = tfm.match(/^netstandard(\d+)\.(\d+)/);
+    if (std) return 2000 + Number(std[1]) * 10 + Number(std[2]);
+    const fw = tfm.match(/^net(\d+)$/);
+    if (fw) return 1000 + Number(fw[1]);
+    return 0;
+  };
+  return score(a) - score(b);
+}
+
+function compareVersions(a, b) {
+  const parse = (v) => v.split(/[.\-+]/).map((p) => (/^\d+$/.test(p) ? Number(p) : p));
+  const pa = parse(a), pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0, y = pb[i] ?? 0;
+    if (x === y) continue;
+    // A prerelease segment (a string) sorts below a numeric release.
+    if (typeof x === 'number' && typeof y === 'string') return 1;
+    if (typeof x === 'string' && typeof y === 'number') return -1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
 }
 
 function pythonSitePackages(config) {
@@ -168,7 +266,25 @@ function pythonSitePackages(config) {
 async function extractLocal(located, pkg, host) {
   if (located.kind === 'npm') return extractNpm(located, host);
   if (located.kind === 'python') return extractPython(located, host);
+  if (located.kind === 'nuget') return extractNuget(located);
   return null;
+}
+
+/**
+ * Read a NuGet package's API from its XML documentation.
+ *
+ * No tree-sitter involved: the assembly is compiled, and the XML file is
+ * already the public surface with prose attached.
+ */
+async function extractNuget(located) {
+  const xml = readFileSafe(located.file, 8 * 1024 * 1024);
+  if (!xml) return null;
+
+  const { parseXmlDoc } = await import('./dotnet-xmldoc.js');
+  const { assembly, symbols } = parseXmlDoc(xml);
+  if (!symbols.length) return null;
+
+  return { version: located.version, source: 'local', description: assembly, symbols };
 }
 
 /**
@@ -403,12 +519,13 @@ function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
-function readFileSafe(file) {
+function readFileSafe(file, maxBytes = 2 * 1024 * 1024) {
   try {
     const stat = fs.statSync(file);
     // A 5 MB bundled .d.ts (looking at you, aws-sdk) yields thousands of
-    // symbols nobody asked for and dominates extraction time.
-    if (stat.size > 2 * 1024 * 1024) return null;
+    // symbols nobody asked for and dominates extraction time. XML doc files
+    // are legitimately larger, so the cap is per-caller.
+    if (stat.size > maxBytes) return null;
     return fs.readFileSync(file, 'utf8');
   } catch {
     return null;

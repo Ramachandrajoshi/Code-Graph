@@ -244,8 +244,26 @@ and the agent stops looking.
 
 ## Languages
 
-Six languages extract symbols and resolve cross-file edges: **TypeScript,
-JavaScript, Python, Go, Rust, Java**.
+Seven languages extract symbols and resolve cross-file edges: **TypeScript,
+JavaScript, Python, Go, Rust, Java, C#**.
+
+Packs load from what the project actually is. `cgraph` reads your manifests —
+`*.csproj`, `package.json`, `pom.xml`, `pyproject.toml`, `go.mod`, `Cargo.toml` —
+before parsing anything, so a .NET repository never loads the Python pack or
+fetches its grammar. A file in an unexpected language still gets its pack loaded
+on sight: discovery decides what loads *eagerly*, never what gets ignored.
+
+`init` reports what it found:
+
+```console
+$ cgraph init
+  detected  dotnet, node  ·  aspnet, entity-framework, angular
+  indexed   412 files, 8,203 symbols, 19,447 edges
+```
+
+Frameworks are detected from every manifest in the tree, not just the root one —
+in a monorepo the root `package.json` holds tooling while Angular or React lives
+in `web/package.json`.
 
 Another 30 grammars are detected and listed by `map` but contribute no symbols
 until someone writes queries for them — `cgraph doctor` says so explicitly rather
@@ -305,14 +323,44 @@ so its schema costs nothing otherwise.
 Both are opt-in and off by default.
 
 **Embeddings** — for "find the code that does X" when you don't know what X is
-called. Costs money per index and sends code to a third party, which cuts against
-the point of the tool, so structural search is always tried first.
+called. Structural search is always tried first.
+
+Point it at a **local, OpenAI-compatible endpoint** — Ollama, LM Studio,
+llama.cpp's server, vLLM, text-embeddings-inference — and nothing leaves your
+machine and nothing costs money:
+
+```jsonc
+// .cgraph/config.json
+{
+  "embeddings": {
+    "enabled": true,
+    "provider": "local",
+    "baseUrl": "http://localhost:11434/v1",   // Ollama; LM Studio is :1234/v1
+    "model": "nomic-embed-text",
+    "dimensions": 768                          // optional
+  }
+}
+```
+
+`baseUrl` accepts the forms these servers document themselves with — with or
+without `/v1`, with or without the full path. `model` is required, because a
+local server exposes whatever it was started with and there is nothing to guess.
+
+`dimensions` is optional and worth setting: cgraph verifies the server actually
+returns that width on the first batch. A silent mismatch corrupts every
+similarity score, and the symptom — subtly wrong rankings — is close to
+untraceable.
+
+No API key is required for a local server. If yours needs one, set
+`CGRAPH_EMBEDDING_API_KEY` (or name your own variable via `apiKeyEnv`).
+
+Hosted providers work too, and cost money per index:
 
 ```json
 { "embeddings": { "enabled": true, "provider": "voyage", "apiKeyEnv": "VOYAGE_API_KEY" } }
 ```
 
-The API key is read from the environment and never written to config.
+Keys are always read from the environment and never written to config.
 
 **Language servers** — `cgraph graph <symbol> --upgrade` consults a language
 server to prove edges tree-sitter could only guess at, then caches the result.

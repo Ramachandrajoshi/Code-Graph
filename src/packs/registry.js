@@ -20,11 +20,12 @@ import { pathToFileURL } from 'node:url';
 import { ParserHost } from '../core/parser-host.js';
 import { extract } from '../core/extract.js';
 import { detectLanguage, languageById } from './languages.js';
+import { detectTechnologies } from './technologies.js';
 import { userCacheDir } from '../core/config.js';
 
 // Order matters: later packs override earlier ones for languages they share.
 // `javascript` must follow `typescript` so it wins the `javascript` binding.
-const BUILTIN = ['typescript', 'javascript', 'python', 'go', 'rust', 'java'];
+const BUILTIN = ['typescript', 'javascript', 'python', 'go', 'rust', 'java', 'csharp'];
 
 export class PackRegistry {
   constructor({ config, packs, host }) {
@@ -35,11 +36,24 @@ export class PackRegistry {
     this.missingQueries = new Set();
   }
 
-  static async load(config) {
+  /**
+   * @param {object} config
+   * @param {object} [opts]
+   * @param {boolean} [opts.allPacks] load every pack regardless of what the
+   *   project appears to use. Only for tooling that must describe the full set,
+   *   such as `cgraph packs list`.
+   */
+  static async load(config, { allPacks = false } = {}) {
     const packs = new Map();
 
+    // What is this project built with? Manifests answer that before a single
+    // source file is read, so a .NET repository never loads the Python pack —
+    // and never fetches the Python grammar that would come with it.
+    const technologies = allPacks ? null : detectTechnologies(config.root);
+    const wanted = technologies ? new Set(technologies.languages) : null;
+
     const sources = [
-      ...BUILTIN.map((id) => ({ dir: new URL(`./${id}/`, import.meta.url), origin: `builtin:${id}` })),
+      ...BUILTIN.map((id) => ({ dir: new URL(`./${id}/`, import.meta.url), origin: `builtin:${id}`, builtin: id })),
       ...discoverExternal(config),
     ];
 
@@ -47,7 +61,16 @@ export class PackRegistry {
       try {
         const pack = await importPack(src);
         if (!pack) continue;
-        for (const lang of pack.languages ?? [pack.id]) {
+
+        const langs = pack.languages ?? [pack.id];
+
+        // Third-party packs are always loaded: someone installed one
+        // deliberately, and second-guessing that would make the plugin system
+        // unreliable. Only the builtins are filtered by detection.
+        const filtered = src.builtin && wanted && !langs.some((l) => wanted.has(l));
+        if (filtered) continue;
+
+        for (const lang of langs) {
           // Later sources win, which is what lets a project-local pack override
           // a builtin without forking.
           packs.set(lang, { ...pack, _origin: src.origin });
@@ -63,7 +86,43 @@ export class PackRegistry {
       onDownload: (name) => process.stderr.write(`  fetching grammar: ${name}\n`),
     });
 
-    return new PackRegistry({ config, packs, host });
+    const registry = new PackRegistry({ config, packs, host });
+    registry.technologies = technologies;
+    registry.lazy = !allPacks;
+    return registry;
+  }
+
+  /**
+   * Load a pack that detection did not anticipate.
+   *
+   * Manifests are a strong signal but not a complete one: a Node repository may
+   * still contain a build script in Python or a vendored Go tool. Rather than
+   * ignoring those files — which would make the graph lie by omission —
+   * discovery only decides what loads *eagerly*, and anything else is loaded on
+   * first sight.
+   */
+  async ensurePackFor(langId) {
+    if (this.packs.has(langId) || this._unavailable?.has(langId)) return this.packs.get(langId);
+    if (!BUILTIN.includes(langId)) {
+      (this._unavailable ??= new Set()).add(langId);
+      return null;
+    }
+
+    try {
+      const pack = await importPack({
+        dir: new URL(`./${langId}/`, import.meta.url), origin: `builtin:${langId}`,
+      });
+      if (!pack) return null;
+      for (const lang of pack.languages ?? [pack.id]) {
+        if (!this.packs.has(lang)) this.packs.set(lang, { ...pack, _origin: `builtin:${langId}` });
+      }
+      this._fingerprint = null;   // the pack set changed
+      return this.packs.get(langId);
+    } catch (err) {
+      process.emitWarning(`cgraph: failed to load pack ${langId}: ${err.message}`);
+      (this._unavailable ??= new Set()).add(langId);
+      return null;
+    }
   }
 
   /**
@@ -131,6 +190,11 @@ export class PackRegistry {
     for (const item of batch) {
       const { file, lang, tok } = item;
       try {
+        // A language detection that discovery did not predict — a build script
+        // in an unexpected language — loads its pack now rather than being
+        // silently skipped.
+        if (this.lazy && !this.packs.has(lang.id)) await this.ensurePackFor(lang.id);
+
         const querySources = this.queriesFor(lang.id);
         if (!querySources.tags) {
           results.push({ ...item, extraction: null, error: null, skipped: 'no-queries' });

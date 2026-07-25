@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **C# language pack.** Types, members, properties, namespaces, XML doc
+  summaries and access modifiers, with `using` resolved to the file declaring
+  that namespace. LINQ and BCL calls are classified as runtime built-ins rather
+  than swamping the unresolved list.
+- **Project technology discovery.** Manifests (`*.csproj`, `package.json`,
+  `pom.xml`, `pyproject.toml`, `go.mod`, `Cargo.toml`, …) are read before any
+  parsing, so only the packs a project actually needs are loaded and only their
+  grammars are fetched. Frameworks — Angular, React, ASP.NET, Entity Framework,
+  Spring, Django, FastAPI — are detected from every manifest in the tree, not
+  just the root. A file in an unpredicted language still loads its pack on
+  sight: discovery decides what loads eagerly, never what gets ignored.
+- **.NET dependency documentation.** NuGet ships compiled assemblies, so there
+  is no source to parse — but packages carry an XML documentation file beside
+  the DLL with every public member and its summary. `docs` now reads it,
+  preferring the newest target framework present.
+- **Local embedding models.** `provider: "local"` targets any OpenAI-compatible
+  endpoint (Ollama, LM Studio, llama.cpp, vLLM) with `baseUrl`, `model` and
+  optional `dimensions`. Nothing leaves the machine and nothing costs money. The
+  returned vector width is verified against `dimensions` on the first batch,
+  because a silent mismatch corrupts every similarity score in a way that is
+  close to untraceable.
+
 - **The index refreshes itself.** The MCP server checks for changes before
   answering, so an agent never reads a graph that disagrees with the working
   tree — after an editor save, a git checkout, a rebase, or another agent's

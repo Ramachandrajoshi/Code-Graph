@@ -197,13 +197,21 @@ test('readArchive dispatches on the magic bytes', () => {
  * a train does not see failures — but run when it is, because the formats these
  * registries actually serve are the point.
  */
-const online = await fetch('https://registry.npmjs.org/ignore', {
+const canReach = async (url) => fetch(url, {
   signal: AbortSignal.timeout(5000),
 }).then((r) => r.ok).catch(() => false);
 
-const net = { skip: online ? false : 'no network' };
+const npmOnline = await canReach('https://registry.npmjs.org/ignore');
+const nugetOnline = await canReach('https://api.nuget.org/v3-flatcontainer/serilog/index.json');
+const mavenOnline = await canReach('https://search.maven.org/solrsearch/select?q=g:com.google.guava&rows=1&wt=json');
+const webOnline = await canReach('https://svelte.dev/llms.txt');
 
-test('fetches and parses a real npm package', net, async () => {
+const npmNet = { skip: npmOnline ? false : 'npm registry unavailable' };
+const nugetNet = { skip: nugetOnline ? false : 'NuGet registry unavailable' };
+const mavenNet = { skip: mavenOnline ? false : 'Maven Central unavailable' };
+const webNet = { skip: webOnline ? false : 'docs site unavailable' };
+
+test('fetches and parses a real npm package', npmNet, async () => {
   const { fetchPackageArtifact } = await import('../src/deps/registry.js');
   const a = await fetchPackageArtifact({ ecosystem: 'npm', package: 'ignore' });
   assert.ok(a, 'ignore ships its own .d.ts');
@@ -211,7 +219,7 @@ test('fetches and parses a real npm package', net, async () => {
   assert.match([...a.files.values()][0], /interface|declare|export/);
 });
 
-test('falls back to DefinitelyTyped for a package with no bundled types', net, async () => {
+test('falls back to DefinitelyTyped for a package with no bundled types', npmNet, async () => {
   // A large share of npm ships no types of its own; without this, express and
   // lodash would return nothing.
   const { fetchPackageArtifact } = await import('../src/deps/registry.js');
@@ -220,14 +228,14 @@ test('falls back to DefinitelyTyped for a package with no bundled types', net, a
   assert.equal(a.typesFrom, '@types/express');
 });
 
-test('fetches a real NuGet package XML doc', net, async () => {
+test('fetches a real NuGet package XML doc', nugetNet, async () => {
   const { fetchPackageArtifact } = await import('../src/deps/registry.js');
   const a = await fetchPackageArtifact({ ecosystem: 'nuget', package: 'Serilog' });
   assert.ok(a?.files.size);
   assert.match([...a.files.values()][0], /<assembly>/);
 });
 
-test('picks the primary Maven artifact, not a variant', net, async () => {
+test('picks the primary Maven artifact, not a variant', mavenNet, async () => {
   // Searching a group returns every artifact in it: guava-gwt comes back before
   // guava, and documenting the wrong one is worse than documenting none.
   const { fetchPackageArtifact } = await import('../src/deps/registry.js');
@@ -236,7 +244,7 @@ test('picks the primary Maven artifact, not a variant', net, async () => {
   assert.equal(a.coordinates, 'com.google.guava:guava');
 });
 
-test('llms.txt is fetched where published and refused where not', net, async () => {
+test('llms.txt is fetched where published and refused where not', webNet, async () => {
   const { fetchLlmsTxt } = await import('../src/deps/registry.js');
 
   const hit = await fetchLlmsTxt('https://svelte.dev');

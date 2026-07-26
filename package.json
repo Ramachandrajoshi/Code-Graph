@@ -1,6 +1,6 @@
 {
   "name": "cgraph",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Token-efficient code retrieval for AI agents. Builds a queryable graph of your codebase and serves it over MCP, so agents stop burning context on grep and whole-file reads.",
   "type": "module",
   "license": "Apache-2.0",

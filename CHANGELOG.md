@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-07-26
+### Fixed
+- Bug fixes from GitHub issues.
+
 ## [0.2.0] — 2026-07-25
 ### Added
 - **Dependency docs are fetched when not installed locally.** Every registry

@@ -203,7 +203,9 @@ const canReach = async (url) => fetch(url, {
 
 const npmOnline = await canReach('https://registry.npmjs.org/ignore');
 const nugetOnline = await canReach('https://api.nuget.org/v3-flatcontainer/serilog/index.json');
-const mavenOnline = await canReach('https://search.maven.org/solrsearch/select?q=g:com.google.guava&rows=1&wt=json');
+const mavenSearchOnline = await canReach('https://search.maven.org/solrsearch/select?q=g:com.google.guava&rows=1&wt=json');
+const mavenRepoOnline = await canReach('https://repo1.maven.org/maven2/com/google/guava/guava/33.5.0-jre/guava-33.5.0-jre-sources.jar');
+const mavenOnline = mavenSearchOnline && mavenRepoOnline;
 const webOnline = await canReach('https://svelte.dev/llms.txt');
 
 const npmNet = { skip: npmOnline ? false : 'npm registry unavailable' };

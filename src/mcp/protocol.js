@@ -32,20 +32,28 @@ export class StdioServer {
     this.initialized = false;
   }
 
-  /** Start reading requests. Resolves when stdin closes. */
+  /**
+   * Start reading requests. Resolves when stdin closes AND every in-flight
+   * request has finished replying — the caller exits the process right after
+   * this resolves, so a request still awaiting its response at that point
+   * would never get one.
+   */
   start() {
     return new Promise((resolve) => {
       const rl = createInterface({ input: process.stdin, terminal: false });
+      const pending = new Set();
 
       rl.on('line', (line) => {
         const text = line.trim();
         if (!text) return;
         // Each line is handled independently and errors are contained: one bad
         // request must not kill a long-lived session.
-        this._handleLine(text).catch((err) => this._logError(err));
+        const task = this._handleLine(text).catch((err) => this._logError(err));
+        pending.add(task);
+        task.finally(() => pending.delete(task));
       });
 
-      rl.on('close', resolve);
+      rl.on('close', () => { Promise.all(pending).then(() => resolve()); });
     });
   }
 

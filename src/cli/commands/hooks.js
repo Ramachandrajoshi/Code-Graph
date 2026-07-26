@@ -120,6 +120,7 @@ ${MARK_END}`;
 
 function uninstall(hooksDir) {
   const removed = [];
+  const skipped = [];
 
   for (const name of [...Object.keys(HOOKS), 'post-commit']) {
     const file = path.join(hooksDir, name);
@@ -133,6 +134,15 @@ function uninstall(hooksDir) {
 
     const start = text.indexOf(MARK_START);
     const end = text.indexOf(MARK_END);
+
+    // An incomplete marker pair (e.g. an interrupted write) means there is no
+    // safe splice point. Leaving the file untouched beats guessing, which
+    // could otherwise slice into whatever the user's own hook wrote after it.
+    if (end === -1 || end < start) {
+      skipped.push(name);
+      continue;
+    }
+
     const cleaned = (text.slice(0, start) + text.slice(end + MARK_END.length)).replace(/\n{3,}/g, '\n\n');
 
     // A hook that is now nothing but a shebang was ours alone; remove the file
@@ -144,8 +154,11 @@ function uninstall(hooksDir) {
   }
 
   out('');
-  if (!removed.length) out('  no cgraph hooks were installed');
+  if (!removed.length && !skipped.length) out('  no cgraph hooks were installed');
   else for (const name of removed) out(`  ${color.green('removed')} ${name}`);
+  for (const name of skipped) {
+    out(`  ${color.yellow('skipped')} ${name}  ${color.dim('marker block is incomplete — remove it by hand')}`);
+  }
   out('');
 }
 

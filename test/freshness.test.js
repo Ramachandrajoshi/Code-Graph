@@ -316,6 +316,23 @@ test('uninstall removes only our block', opts, () => {
   } finally { cleanup(root); }
 });
 
+test('uninstall leaves a truncated marker block alone rather than mangling it', opts, () => {
+  const root = gitRepo();
+  try {
+    const file = path.join(root, '.git', 'hooks', 'post-merge');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // A start marker with no matching end — e.g. an interrupted write —
+    // must not be spliced on a guess at where the block ends.
+    fs.writeFileSync(file, '#!/bin/sh\necho "existing behaviour"\n# >>> cgraph >>>\necho "half-written"\n');
+    const before = fs.readFileSync(file, 'utf8');
+
+    cli(root, ['hooks', 'uninstall']);
+
+    const after = fs.readFileSync(file, 'utf8');
+    assert.equal(after, before, 'file must be untouched when the marker pair is incomplete');
+  } finally { cleanup(root); }
+});
+
 test('installing twice does not duplicate the block', opts, () => {
   const root = gitRepo();
   try {

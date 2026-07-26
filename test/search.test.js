@@ -252,6 +252,33 @@ export function caller() { target(); target(); target(); }
   } finally { fx.cleanup(); }
 });
 
+test('callers reports the weakest confidence among a caller\'s sites, not the strongest', opts, async () => {
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'src/a.js': `
+export function target() {}
+export function caller() { target(); }
+`,
+  });
+  try {
+    const target = fx.node('target');
+    const caller = fx.node('caller');
+
+    // A second, INFERRED call site to the same target from the same caller —
+    // grouping must not let the first EXACT site launder this one.
+    fx.store.run(
+      `INSERT INTO edges(src_id, dst_id, ext_id, kind, confidence, file_id, line)
+       VALUES (?, ?, NULL, 'call', 'INFERRED', ?, ?)`,
+      caller.id, target.id, caller.file_id, caller.start_line
+    );
+
+    const rows = callers(fx.store, target.id);
+    const row = rows.find((r) => r.qname.includes('caller'));
+    assert.equal(row.sites, 2, 'both call sites credited to the same caller');
+    assert.equal(row.confidence, 'INFERRED', 'one inferred site must not be hidden behind an exact one');
+  } finally { fx.cleanup(); }
+});
+
 test('callees separates internal targets from dependencies', opts, async () => {
   const fx = await buildFixture({
     'package.json': '{"name":"t"}',

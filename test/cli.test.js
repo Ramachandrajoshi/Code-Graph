@@ -153,6 +153,8 @@ test('read accepts a path:line-range', opts, () => {
   try {
     const output = run(root, ['read', 'src/db.js:2-3']);
     assert.match(output, /src\/db\.js:2-3/);
+    assert.ok(!/index is stale/.test(output),
+      'a line-range query always slices by line; that is not a staleness fallback');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

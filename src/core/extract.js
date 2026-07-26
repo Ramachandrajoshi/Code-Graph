@@ -350,14 +350,14 @@ function dedupeImports(imports) {
   const out = [];
 
   for (const imp of imports) {
-    if (imp.symbol || imp.alias) specific.add(`${imp.spec} ${imp.line}`);
+    if (imp.symbol || imp.alias) specific.add(`${imp.spec}\0${imp.line}`);
   }
 
   for (const imp of imports) {
-    const group = `${imp.spec} ${imp.line}`;
+    const group = `${imp.spec}\0${imp.line}`;
     if (!imp.symbol && !imp.alias && specific.has(group)) continue;
 
-    const key = `${group} ${imp.symbol ?? ''} ${imp.alias ?? ''}`;
+    const key = `${group}\0${imp.symbol ?? ''}\0${imp.alias ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(imp);

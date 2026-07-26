@@ -216,7 +216,14 @@ export function readSymbol(store, root, node, { mode = 'body', budget = 0 } = {}
   const fitted = fitToBudget(bodyLines, budget ? budget - estimate(header) : null);
 
   const out = [header];
-  if (stale) out.push('  (index is stale; showing line-based slice — run `cgraph update`)');
+  // `kind: 'lines'` is a synthesized pseudo-node for an explicit path:start-end
+  // query (see readRange in cli/commands/read.js and toolRead in mcp/server.js)
+  // — it always forces the line-based path via end_byte, so `stale` there
+  // reflects the query shape, not actual index staleness, and warning about
+  // staleness would be a false alarm on a freshly built index.
+  if (stale && node.kind !== 'lines') {
+    out.push('  (index is stale; showing line-based slice — run `cgraph update`)');
+  }
   out.push(...fitted.lines);
   if (fitted.dropped) {
     out.push(`  ... ${fitted.dropped} more lines, through line ${node.end_line} (raise --budget for the rest)`);

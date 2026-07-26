@@ -25,10 +25,15 @@ export function callers(store, nodeId, { limit = 50, minConfidence = null } = {}
   // five lines is one caller; listing it five times spends tokens repeating a
   // fact the agent already has. The site count is kept because "called 5 times
   // from here" is genuinely useful, and costs three characters.
+  //
+  // MAX(e.confidence) is the weakest-link aggregate, not the strongest: 'I' >
+  // 'E' lexicographically, so one INFERRED site among several EXACT ones marks
+  // the whole caller INFERRED. MIN would let a single proven site launder the
+  // rest into looking proven too.
   return store.all(
     `SELECT n.id, n.qname, n.kind, n.start_line, n.rank, f.path,
             MIN(e.line) AS line, COUNT(*) AS sites,
-            MIN(e.confidence) AS confidence, MIN(e.kind) AS edge_kind
+            MAX(e.confidence) AS confidence, MIN(e.kind) AS edge_kind
        FROM edges e
        JOIN nodes n ON n.id = e.src_id
        JOIN files f ON f.id = n.file_id

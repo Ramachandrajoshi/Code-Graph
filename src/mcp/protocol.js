@@ -53,7 +53,7 @@ export class StdioServer {
         task.finally(() => pending.delete(task));
       });
 
-      rl.on('close', () => { Promise.all(pending).then(resolve); });
+      rl.on('close', () => { Promise.all(pending).then(() => resolve()); });
     });
   }
 

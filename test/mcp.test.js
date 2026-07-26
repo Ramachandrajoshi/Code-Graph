@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { buildFixture } from './fixture.js';
@@ -25,6 +25,7 @@ const skip = (() => {
 const opts = { skip };
 
 const BIN = fileURLToPath(new URL('../bin/cgraph.js', import.meta.url));
+const PROTOCOL = fileURLToPath(new URL('../src/mcp/protocol.js', import.meta.url));
 
 /**
  * Drive the server over stdio and collect responses.
@@ -280,4 +281,49 @@ test('status reports index statistics', opts, async () => {
     assert.match(text, /symbols/);
     assert.match(text, /edges/);
   } finally { fx.cleanup(); }
+});
+
+test('an in-flight request still receives a response after stdin closes', async () => {
+  const code = `
+    import { StdioServer } from ${JSON.stringify(pathToFileURL(PROTOCOL).href)};
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const server = new StdioServer({
+      name: 't',
+      version: '1',
+      handlers: {
+        async listTools() { return []; },
+        async callTool(name) {
+          await delay(50);
+          return { content: [{ type: 'text', text: name }] };
+        },
+      },
+    });
+    await server.start();
+  `;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => { stdout += d; });
+  child.stderr.on('data', (d) => { stderr += d; });
+
+  child.stdin.write(JSON.stringify(INIT) + '\n');
+  child.stdin.write(JSON.stringify({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: 'delayed', arguments: {} },
+  }) + '\n');
+  child.stdin.end();
+
+  await new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(stderr))));
+  });
+
+  const responses = stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const toolResponse = responses.find((r) => r.id === 2);
+  assert.ok(toolResponse, 'expected a tools/call response before process exit');
+  assert.equal(toolResponse.result.content[0].text, 'delayed');
 });

@@ -225,7 +225,7 @@ test('an explicitly requested agent is set up even with no prior presence', () =
 
 test('the instruction block names the tools and the grep replacement', () => {
   const block = instructionBlock();
-  for (const tool of ['map', 'find', 'read', 'graph', 'docs', 'status']) {
+  for (const tool of ['map', 'find', 'read', 'graph', 'docs', 'update']) {
     assert.match(block, new RegExp(`\\b${tool}\\b`), `should mention ${tool}`);
   }
   assert.match(block, /grep/, 'the behaviour being replaced must be named');

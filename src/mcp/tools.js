@@ -1,12 +1,13 @@
 /**
  * MCP tool definitions.
  *
- * SEVEN tools, not thirty, and every word here is rationed. Tool schemas sit in
- * the agent's context on EVERY turn, so this file is a permanent token tax on
- * every conversation — a 30-tool server spends 3-4k tokens forever in order to
- * save tokens on retrieval, which largely defeats the purpose.
+ * SIX tools, not thirty (seven with embeddings enabled), and every word here
+ * is rationed. Tool schemas sit in the agent's context on EVERY turn, so this
+ * file is a permanent token tax on every conversation — a 30-tool server
+ * spends 3-4k tokens forever in order to save tokens on retrieval, which
+ * largely defeats the purpose.
  *
- * Measured cost: ~1300 tokens for all six, enforced by test/mcp.test.js. The
+ * Measured cost: under the 1400-token budget enforced by test/mcp.test.js. The
  * original target was 900, which turned out not to be reachable while keeping
  * real enums and filters — roughly half the remaining cost is JSON Schema
  * structure rather than prose, and trimming further would mean removing

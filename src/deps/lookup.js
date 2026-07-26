@@ -115,8 +115,8 @@ export function lookupDocs(store, config, { pkg, symbol = null, top = 15 }) {
   if (undocumented === rows.length) {
     lines.push(
       '',
-      'No signatures extracted yet. Run `cgraph deps` to read them from node_modules ' +
-        'or fetch them from the registry.'
+      'No signatures extracted yet. Run `cgraph docs --refresh` to read them from ' +
+        'node_modules or fetch them from the registry.'
     );
   }
 

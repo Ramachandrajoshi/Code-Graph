@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import {
   AGENTS, AGENT_IDS, selectAgents, registerMcp, writeInstructions,
-  instructionFilesFor, instructionBlock,
+  instructionFilesFor, instructionBlock, writeClaudeSettings,
 } from '../src/agents.js';
 
 const require = createRequire(import.meta.url);
@@ -221,6 +221,73 @@ test('an explicitly requested agent is set up even with no prior presence', () =
   } finally { cleanup(root); }
 });
 
+// ---------------------------------------------------------------- Claude settings
+
+test('writeClaudeSettings pre-approves the MCP server and its tools', () => {
+  const root = makeRepo();
+  try {
+    const result = writeClaudeSettings(root);
+    assert.equal(result.status, 'created');
+    const json = readJson(root, '.claude/settings.json');
+    assert.equal(json.enableAllProjectMcpServers, true);
+    assert.ok(json.enabledMcpjsonServers.includes('cgraph'));
+    for (const tool of ['status', 'map', 'find', 'read', 'graph', 'docs']) {
+      assert.ok(
+        json.permissions.allow.includes(`mcp__cgraph__${tool}`),
+        `should pre-approve mcp__cgraph__${tool}`
+      );
+    }
+  } finally { cleanup(root); }
+});
+
+test('an explicit enableAllProjectMcpServers: false is left alone', () => {
+  // The user turned this off on purpose; re-enabling it silently would be the
+  // same kind of trust-destroying edit registerMcp avoids for a custom command.
+  const root = makeRepo({
+    '.claude/settings.json': JSON.stringify({ enableAllProjectMcpServers: false }),
+  });
+  try {
+    writeClaudeSettings(root);
+    assert.equal(readJson(root, '.claude/settings.json').enableAllProjectMcpServers, false);
+  } finally { cleanup(root); }
+});
+
+test('existing permissions and servers survive alongside the new ones', () => {
+  const root = makeRepo({
+    '.claude/settings.json': JSON.stringify({
+      enabledMcpjsonServers: ['other-server'],
+      permissions: { allow: ['Bash(git status)'] },
+    }),
+  });
+  try {
+    writeClaudeSettings(root);
+    const json = readJson(root, '.claude/settings.json');
+    assert.ok(json.enabledMcpjsonServers.includes('other-server'));
+    assert.ok(json.enabledMcpjsonServers.includes('cgraph'));
+    assert.ok(json.permissions.allow.includes('Bash(git status)'));
+    assert.ok(json.permissions.allow.includes('mcp__cgraph__map'));
+  } finally { cleanup(root); }
+});
+
+test('a settings.json that is not valid JSON is left untouched', () => {
+  const broken = '{ this is not json';
+  const root = makeRepo({ '.claude/settings.json': broken });
+  try {
+    assert.equal(writeClaudeSettings(root).status, 'unparseable');
+    assert.equal(read(root, '.claude/settings.json'), broken);
+  } finally { cleanup(root); }
+});
+
+test('running writeClaudeSettings twice changes nothing the second time', () => {
+  const root = makeRepo();
+  try {
+    writeClaudeSettings(root);
+    const before = read(root, '.claude/settings.json');
+    assert.equal(writeClaudeSettings(root).status, 'current');
+    assert.equal(read(root, '.claude/settings.json'), before);
+  } finally { cleanup(root); }
+});
+
 // ---------------------------------------------------------------- instructions
 
 test('the instruction block names the tools and the grep replacement', () => {
@@ -306,6 +373,18 @@ test('init --agent selects only what was asked for', opts, () => {
     assert.ok(readJson(root, 'opencode.json').mcp.cgraph);
     assert.match(read(root, 'AGENTS.md'), /cgraph:start/);
     assert.ok(!fs.existsSync(path.join(root, '.mcp.json')), 'claude not requested');
+    assert.ok(!fs.existsSync(path.join(root, '.claude/settings.json')), 'claude not requested');
+  } finally { cleanup(root); }
+});
+
+test('init pre-approves Claude Code MCP permissions by default', opts, () => {
+  const root = makeRepo();
+  try {
+    init(root);
+    const json = readJson(root, '.claude/settings.json');
+    assert.equal(json.enableAllProjectMcpServers, true);
+    assert.ok(json.enabledMcpjsonServers.includes('cgraph'));
+    assert.ok(json.permissions.allow.includes('mcp__cgraph__find'));
   } finally { cleanup(root); }
 });
 
@@ -370,11 +449,13 @@ test('running init twice changes nothing the second time', opts, () => {
       mcp: read(root, '.mcp.json'),
       vscode: read(root, '.vscode/mcp.json'),
       claude: read(root, 'CLAUDE.md'),
+      settings: read(root, '.claude/settings.json'),
     };
     init(root);
     assert.equal(read(root, '.mcp.json'), before.mcp);
     assert.equal(read(root, '.vscode/mcp.json'), before.vscode);
     assert.equal(read(root, 'CLAUDE.md'), before.claude);
+    assert.equal(read(root, '.claude/settings.json'), before.settings);
   } finally { cleanup(root); }
 });
 

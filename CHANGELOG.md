@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **JSON, CSS, HTML, and Bash language packs.** JSON object keys and CSS
+  rules/keyframes become nested symbols the same way code does; HTML surfaces
+  landmark tags, `<script>`/`<style>` blocks, and any element with an `id`
+  (narrow by design — every `<div>` as a symbol would be noise); Bash extracts
+  function definitions and resolves calls between them. A YAML pack ships
+  alongside these but is not yet registered: the bundled tree-sitter grammar
+  fails to parse under the pinned `web-tree-sitter` version, so YAML files
+  still fall back to being indexed as unparsed stubs until that combination is
+  fixed upstream.
+- **`packs.strict` config option.** Off by default. A project can turn off the
+  "load an unpredicted language on first sight" fallback, so only packs for
+  languages its own manifests actually named are ever used — a vendored
+  script in an unexpected language becomes a stub instead of silently pulling
+  in a grammar+pack for it.
+- **`cgraph init` pre-approves its own MCP tools for Claude Code.** Previously
+  `init` registered the MCP server and wrote the tool-usage instructions, but
+  the tools still sat behind a permission prompt in the checked-in project
+  config — fine for an interactive session where a human clears it once, but
+  a subagent spawned non-interactively has nobody to click "allow", so a
+  denied call looked exactly like a missing tool and the model fell back to
+  grep. `init` now also writes the approval into `.claude/settings.json`
+  (shared, not the gitignored `settings.local.json`), additively and without
+  touching anything a user already set there.
+
 ## [0.3.0] — 2026-07-27
 ### Added
 - **Sub-project detection.** A root that bundles several independently-cloned

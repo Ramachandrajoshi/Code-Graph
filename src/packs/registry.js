@@ -25,7 +25,14 @@ import { userCacheDir } from '../core/config.js';
 
 // Order matters: later packs override earlier ones for languages they share.
 // `javascript` must follow `typescript` so it wins the `javascript` binding.
-const BUILTIN = ['typescript', 'javascript', 'python', 'go', 'rust', 'java', 'csharp'];
+// 'yaml' is deliberately absent: the bundled tree-sitter-yaml.wasm
+// (tree-sitter-wasms@0.1.13) fails to parse anything at all under the pinned
+// web-tree-sitter@0.25.10 (an external-scanner symbol resolution error, not a
+// query problem — see src/packs/yaml/index.js). Registering it would turn
+// today's clean "no extraction queries yet" skip into a parse error on every
+// YAML file. Add 'yaml' back once that combination is fixed upstream.
+const BUILTIN = ['typescript', 'javascript', 'python', 'go', 'rust', 'java', 'csharp',
+  'json', 'css', 'html', 'bash'];
 
 export class PackRegistry {
   constructor({ config, packs, host }) {
@@ -89,6 +96,7 @@ export class PackRegistry {
     const registry = new PackRegistry({ config, packs, host });
     registry.technologies = technologies;
     registry.lazy = !allPacks;
+    registry.strict = config.packs?.strict ?? false;
     return registry;
   }
 
@@ -100,10 +108,14 @@ export class PackRegistry {
    * ignoring those files — which would make the graph lie by omission —
    * discovery only decides what loads *eagerly*, and anything else is loaded on
    * first sight.
+   *
+   * Unless `strict` is set: a project can decide it only ever wants exactly
+   * what manifest-based detection found, trading that safety net for never
+   * pulling in a grammar+pack the project's own manifests gave no signal for.
    */
   async ensurePackFor(langId) {
     if (this.packs.has(langId) || this._unavailable?.has(langId)) return this.packs.get(langId);
-    if (!BUILTIN.includes(langId)) {
+    if (this.strict || !BUILTIN.includes(langId)) {
       (this._unavailable ??= new Set()).add(langId);
       return null;
     }

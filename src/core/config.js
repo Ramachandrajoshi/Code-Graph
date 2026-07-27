@@ -54,7 +54,15 @@ export const DEFAULTS = {
   detectSubprojects: true,
 
   // Language packs explicitly enabled/disabled. Empty `enable` means autodetect.
-  packs: { enable: [], disable: [] },
+  //
+  // `strict` turns off the "load on first sight" fallback (see the comment on
+  // `ensurePackFor` in src/packs/registry.js): only packs for languages that
+  // manifest-based detection actually found at load time are ever used. A
+  // vendored script in a language the manifests didn't mention becomes a stub
+  // (detected, but no symbols) instead of silently pulling in a grammar+pack
+  // for it. Off by default because that fallback is what keeps map/find honest
+  // about files most repos don't expect to need a pack for.
+  packs: { enable: [], disable: [], strict: false },
 
   // Dependency documentation.
   deps: {

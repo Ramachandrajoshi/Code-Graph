@@ -128,8 +128,14 @@ test('CAPTURES documents the vocabulary the extractor understands', () => {
 
 // ---------------------------------------------------------------- builtin packs
 
+// 'yaml' is excluded: its bundled grammar fails to parse under the pinned
+// web-tree-sitter version (see the comment in src/packs/yaml/index.js), so
+// it is not registered in BUILTIN either.
+const BUILTIN_IDS = ['typescript', 'javascript', 'python', 'go', 'rust', 'java',
+  'json', 'css', 'html', 'bash'];
+
 test('every builtin pack passes its own validation', opts, async () => {
-  for (const id of ['typescript', 'javascript', 'python', 'go', 'rust', 'java']) {
+  for (const id of BUILTIN_IDS) {
     const pack = (await import(`../src/packs/${id}/index.js`)).default;
     assert.deepEqual(validatePack(pack), [], `pack '${id}' is malformed`);
   }
@@ -142,7 +148,7 @@ test('every declared query file exists and compiles', opts, async () => {
   const host = new ParserHost({ offline: true });
 
   try {
-    for (const id of ['typescript', 'javascript', 'python', 'go', 'rust', 'java']) {
+    for (const id of BUILTIN_IDS) {
       const pack = (await import(`../src/packs/${id}/index.js`)).default;
       const grammar = languageById(pack.languages[0]).grammar;
 
@@ -279,6 +285,92 @@ test('Java separates JDK imports from Maven dependencies', opts, async () => {
       fx.importOf('src/main/java/A.java', 'com.fasterxml.jackson.databind.ObjectMapper').ext_package,
       'com.fasterxml.jackson'
     );
+  } finally { fx.cleanup(); }
+});
+
+// ---------------------------------------------------------------- config & markup packs
+
+test('JSON keys become nested symbols', opts, async () => {
+  const fx = await buildFixture({
+    'package.json': JSON.stringify({ name: 'x', scripts: { build: 'tsc', test: 'vitest' } }, null, 2),
+  });
+  try {
+    assert.equal(fx.node('scripts').kind, 'key');
+    const build = fx.node('build');
+    assert.equal(build.kind, 'key');
+    assert.equal(build.qname, 'package.json::scripts.build');
+  } finally { fx.cleanup(); }
+});
+
+test('CSS rules are keyed by selector, keyframes by name', opts, async () => {
+  const fx = await buildFixture({
+    'app.css': '.btn, .btn-primary {\n  color: red;\n}\n\n@keyframes spin {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n',
+  });
+  try {
+    assert.equal(fx.node('.btn, .btn-primary').kind, 'rule');
+    assert.equal(fx.node('spin').kind, 'rule');
+  } finally { fx.cleanup(); }
+});
+
+test('HTML surfaces landmark tags, script/style blocks, and ided elements', opts, async () => {
+  const fx = await buildFixture({
+    'index.html': '<html><head><title>x</title></head><body>\n'
+      + '  <nav id="main-nav"></nav>\n'
+      + '  <div id="app"></div>\n'
+      + '  <script>console.log(1)</script>\n'
+      + '</body></html>\n',
+  });
+  try {
+    const rows = fx.store.all(
+      "SELECT name, kind FROM nodes n JOIN files f ON f.id = n.file_id WHERE f.path = 'index.html' AND kind != 'module'"
+    );
+    const names = rows.map((r) => r.name);
+    assert.ok(names.includes('html'), 'landmark tag');
+    assert.ok(names.includes('script'), 'script block, a distinct node type from element');
+    assert.ok(names.includes('main-nav'), 'id attribute value');
+    assert.ok(names.includes('app'), 'id attribute value');
+    assert.ok(!names.includes('title'), 'non-landmark, id-less tags stay out to avoid DOM-wide noise');
+  } finally { fx.cleanup(); }
+});
+
+test('Bash extracts function definitions and resolves calls between them', opts, async () => {
+  const fx = await buildFixture({
+    'deploy.sh': '#!/bin/bash\nfunction build() {\n  echo "building"\n}\n\ndeploy() {\n  build\n  echo "deployed"\n}\n',
+  });
+  try {
+    assert.equal(fx.node('build').kind, 'function');
+    assert.equal(fx.node('deploy').kind, 'function');
+    assert.equal(fx.edge('deploy', 'build')?.kind, 'call');
+  } finally { fx.cleanup(); }
+});
+
+// ---------------------------------------------------------------- strict mode
+
+test('a stray file in an undetected language is lazy-loaded by default', opts, async () => {
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'src/a.js': 'export function x() {}\n',
+    'tools/build.py': 'def helper():\n    pass\n',
+  });
+  try {
+    assert.equal(fx.node('helper').kind, 'function');
+  } finally { fx.cleanup(); }
+});
+
+test('packs.strict suppresses that fallback: the file is a stub, not parsed', opts, async () => {
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'src/a.js': 'export function x() {}\n',
+    'tools/build.py': 'def helper():\n    pass\n',
+  }, { packs: { strict: true } });
+  try {
+    assert.throws(() => fx.node('helper'), /no node named/);
+    // The detected stack's own pack still loads normally — strict only turns
+    // off the fallback for languages detection gave no signal for.
+    assert.equal(fx.node('x').kind, 'function');
+
+    const row = fx.store.get("SELECT parsed FROM files WHERE path = 'tools/build.py'");
+    assert.equal(row.parsed, 0, 'file is still indexed as a stub, just unparsed');
   } finally { fx.cleanup(); }
 });
 

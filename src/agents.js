@@ -10,6 +10,12 @@
  * available but no guidance keeps reaching for grep, because that is what its
  * training says to do. The instruction block is what actually changes behaviour,
  * so it is written in the same breath as the MCP entry.
+ *
+ * For Claude Code specifically, registration and instructions are not enough
+ * either: without a pre-approval in the shared settings.json, the tool sits
+ * behind a permission prompt that only a human in an interactive session can
+ * clear. A subagent has no one to click "allow", so a denied call just looks
+ * like a missing tool and the model falls back to grep.
  */
 
 import fs from 'node:fs';
@@ -165,6 +171,71 @@ function serverEntry(shape, root) {
   }
 
   return { command: 'cgraph', args: ['serve', '--root', rootArg] };
+}
+
+// ---------------------------------------------------------------- Claude settings
+
+const CLAUDE_SETTINGS_FILE = '.claude/settings.json';
+const CLAUDE_TOOLS = ['status', 'map', 'find', 'read', 'graph', 'docs'].map(
+  (t) => `mcp__cgraph__${t}`
+);
+
+/**
+ * Pre-approve the cgraph MCP server and its tools in Claude Code's shared,
+ * checked-in settings.
+ *
+ * `.mcp.json` alone leaves the server behind an approval prompt. A human
+ * clicks through that once and forgets about it, but a subagent — spawned
+ * non-interactively, with nobody there to approve anything — just has the
+ * call denied and falls back to grep, indistinguishable from the tool never
+ * having existed. Writing the approval into `settings.json` (not the
+ * gitignored `settings.local.json`) means every clone and every subagent
+ * starts pre-approved, not just the developer who ran `init`.
+ *
+ * Additive only: an explicit `enableAllProjectMcpServers: false` a user set
+ * on purpose is left alone, and existing permissions/servers are never
+ * removed, only added to.
+ */
+export function writeClaudeSettings(root, { serverName = 'cgraph' } = {}) {
+  const file = path.join(root, CLAUDE_SETTINGS_FILE);
+  const existed = fs.existsSync(file);
+
+  let json = {};
+  if (existed) {
+    try {
+      json = JSON.parse(stripJsonComments(fs.readFileSync(file, 'utf8')));
+    } catch {
+      return { file: CLAUDE_SETTINGS_FILE, status: 'unparseable' };
+    }
+  }
+
+  let changed = false;
+
+  if (json.enableAllProjectMcpServers === undefined) {
+    json.enableAllProjectMcpServers = true;
+    changed = true;
+  }
+
+  json.enabledMcpjsonServers ??= [];
+  if (!json.enabledMcpjsonServers.includes(serverName)) {
+    json.enabledMcpjsonServers.push(serverName);
+    changed = true;
+  }
+
+  json.permissions ??= {};
+  json.permissions.allow ??= [];
+  for (const tool of CLAUDE_TOOLS) {
+    if (!json.permissions.allow.includes(tool)) {
+      json.permissions.allow.push(tool);
+      changed = true;
+    }
+  }
+
+  if (!changed) return { file: CLAUDE_SETTINGS_FILE, status: 'current' };
+
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(json, null, 2) + '\n');
+  return { file: CLAUDE_SETTINGS_FILE, status: existed ? 'updated' : 'created' };
 }
 
 // ---------------------------------------------------------------- instructions

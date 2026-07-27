@@ -22,6 +22,7 @@ import { PackRegistry } from '../../packs/registry.js';
 import { detectSubprojectTechnologies } from '../../packs/technologies.js';
 import {
   AGENTS, AGENT_IDS, selectAgents, registerMcp, writeInstructions, instructionFilesFor,
+  writeClaudeSettings,
 } from '../../agents.js';
 import { out, color, Progress, toks, duration } from '../ui.js';
 
@@ -114,6 +115,11 @@ export async function run(args) {
     ? instructionFilesFor(connected).map((file) => writeInstructions(root, file))
     : [];
 
+  // Registration alone leaves the tool behind a permission prompt that only a
+  // human in an interactive session can clear — a subagent has no one to
+  // click "allow", so this closes that gap for Claude Code specifically.
+  const settingsResult = connected.includes('claude') ? writeClaudeSettings(root) : null;
+
   // 4. Report ----------------------------------------------------------------
   out('');
   out(`  ${color.green('created')}   .cgraph/`);
@@ -140,6 +146,17 @@ export async function run(args) {
       current: color.dim('current'),
     }[r.status];
     out(`  ${tag}   ${r.file}  ${color.dim('agent instructions')}`);
+  }
+
+  if (settingsResult) {
+    const tag = {
+      created: color.green('created'),
+      updated: color.green('updated'),
+      current: color.dim('current'),
+      unparseable: color.yellow('skipped'),
+    }[settingsResult.status];
+    const note = settingsResult.status === 'unparseable' ? ' (not valid JSON; left alone)' : '';
+    out(`  ${tag}   ${settingsResult.file}${note ? color.dim(note) : ''}  ${color.dim('pre-approved so subagents don\'t need a human to allow it')}`);
   }
 
   out('');

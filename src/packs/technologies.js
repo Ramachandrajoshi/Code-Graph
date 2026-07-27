@@ -222,3 +222,18 @@ export function languagesToLoad(root, { extensionsPresent = [] } = {}) {
   for (const l of extensionsPresent) langs.add(l);
   return { languages: [...langs], technologies: tech };
 }
+
+/**
+ * Technologies for each detected nested repo (a fleet-of-microservices root),
+ * keyed by the repo-relative path the walker recorded as its boundary.
+ *
+ * Reuses `detectTechnologies` exactly as-is, just scoped to each subproject's
+ * own directory instead of the true root — it already takes any directory.
+ */
+export function detectSubprojectTechnologies(root, subprojectPaths) {
+  const out = {};
+  for (const rel of subprojectPaths) {
+    out[rel] = detectTechnologies(path.join(root, ...rel.split('/')));
+  }
+  return out;
+}

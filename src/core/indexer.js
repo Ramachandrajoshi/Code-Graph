@@ -49,6 +49,14 @@ export class Indexer {
    * @param {boolean} [opts.dryRun] walk and report, write nothing
    */
   async run({ force = false, dryRun = false } = {}) {
+    // A migration that added a column only backfillable by re-walking the repo
+    // (e.g. schema v3's `subproject`) sets this once, on the one Store.open()
+    // call that crosses the schema boundary. Forcing here — not just skipping
+    // the stat fast path — is what makes the incremental "unchanged" shortcut
+    // below actually re-persist every file instead of leaving the new column
+    // null on anything whose bytes didn't change.
+    force = force || (!dryRun && this.store?.needsFullReindex === true);
+
     const started = Date.now();
     const stats = {
       seen: 0, added: 0, changed: 0, unchanged: 0, removed: 0,
@@ -233,6 +241,7 @@ export class Indexer {
       tok: 0,
       parsed: 0,
       skipReason: file.skipReason,
+      subproject: file.subproject ?? null,
     });
   }
 
@@ -293,6 +302,7 @@ export class Indexer {
       tok,
       parsed,
       skipReason,
+      subproject: file.subproject ?? null,
     });
   }
 }

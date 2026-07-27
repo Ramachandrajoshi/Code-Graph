@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Sub-project detection.** A root that bundles several independently-cloned
+  repos — a frontend/backend/desktop fleet of microservices, each its own git
+  checkout, opened as one workspace — now has every file labeled with which
+  nested repo it belongs to. `cgraph init` and `cgraph map` report each
+  detected sub-project alongside its own stack and frameworks, so an agent
+  working across the fleet can tell an Angular file from an ASP.NET file at a
+  glance instead of treating the whole tree as one undifferentiated project.
+  A nested repo's own local `.git/info/exclude` is now honored too, the same
+  way `.gitignore` and `.cgraphignore` already were. Off switch:
+  `detectSubprojects: false`.
+
 ## [0.2.5] — 2026-07-26
 ## [0.2.4] — 2026-07-26
 ## [0.2.3] — 2026-07-26

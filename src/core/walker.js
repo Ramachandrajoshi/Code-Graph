@@ -136,10 +136,16 @@ function hashContent(buf) {
 /**
  * Walk the repository, yielding one record per candidate file.
  *
- * Yields `{ rel, abs, size, mtime, hash, content, skipReason }`. A record with a
- * `skipReason` is still yielded — the file is recorded as a stub so `map` can
- * show it exists, but it is never parsed. Silently omitting files would make the
- * graph lie about what the repo contains.
+ * Yields `{ rel, abs, size, mtime, hash, content, skipReason, subproject }`. A
+ * record with a `skipReason` is still yielded — the file is recorded as a stub
+ * so `map` can show it exists, but it is never parsed. Silently omitting files
+ * would make the graph lie about what the repo contains.
+ *
+ * `subproject` is the repo-relative path of the nearest ancestor directory that
+ * declares its own `.git` (directory or worktree-style file), or `null` when the
+ * file lives directly under the walked root. This is how a root that bundles
+ * several independently-cloned repos (a frontend/backend/desktop fleet, say)
+ * gets its files labeled by which repo they actually belong to.
  *
  * @param {object} [opts]
  * @param {boolean} [opts.readContent]
@@ -156,10 +162,10 @@ export function* walk(root, config, { readContent = true, isUnchanged = null } =
     ...(config.ignore ?? []),
   ]);
 
-  yield* walkDir(root, '', rootStack, config, readContent, isUnchanged);
+  yield* walkDir(root, '', rootStack, null, config, readContent, isUnchanged);
 }
 
-function* walkDir(root, dirRel, stack, config, readContent, isUnchanged) {
+function* walkDir(root, dirRel, stack, subprojectRel, config, readContent, isUnchanged) {
   const abs = dirRel ? path.join(root, dirRel) : root;
 
   let entries;
@@ -175,6 +181,30 @@ function* walkDir(root, dirRel, stack, config, readContent, isUnchanged) {
   for (const name of IGNORE_FILES) {
     if (entries.some((e) => e.name === name && e.isFile())) {
       localStack = localStack.push(dirRel, readPatterns(path.join(abs, name)));
+    }
+  }
+
+  // A nested `.git` (the walked root's own `.git` aside) marks this directory as
+  // the top of an independently-cloned repo — a fleet of microservices, each its
+  // own checkout, is the motivating case. Innermost boundary wins: a deeper
+  // nested repo overrides an outer one, so a single scalar (not a stack) is
+  // enough, unlike ignore rules which merge across levels.
+  let localSubproject = subprojectRel;
+  if (dirRel !== '' && config.detectSubprojects !== false) {
+    // Matches a worktree/submodule `.git` *file* too, not just a real directory
+    // — both mark a distinct working tree.
+    const gitEntry = entries.find((e) => e.name === '.git');
+    if (gitEntry) {
+      localSubproject = dirRel;
+      // The nested repo's own local, uncommitted excludes were previously
+      // invisible: `globalPatterns()` only reads .git/info/exclude for the
+      // single root passed to `walk()`. Only real directories have one to read;
+      // a worktree pointer file's real excludes live elsewhere and aren't worth
+      // chasing here.
+      if (gitEntry.isDirectory()) {
+        const exclude = readPatterns(path.join(abs, '.git', 'info', 'exclude'));
+        if (exclude.length) localStack = localStack.push(dirRel, exclude);
+      }
     }
   }
 
@@ -197,7 +227,7 @@ function* walkDir(root, dirRel, stack, config, readContent, isUnchanged) {
       // Testing the directory before descending is the main performance win:
       // it prunes node_modules without stat-ing a single file inside it.
       if (localStack.ignores(rel, true)) continue;
-      yield* walkDir(root, rel, localStack, config, readContent, isUnchanged);
+      yield* walkDir(root, rel, localStack, localSubproject, config, readContent, isUnchanged);
       continue;
     }
 
@@ -212,7 +242,10 @@ function* walkDir(root, dirRel, stack, config, readContent, isUnchanged) {
       continue;
     }
 
-    const base = { rel, abs: absFile, size: stat.size, mtime: Math.floor(stat.mtimeMs) };
+    const base = {
+      rel, abs: absFile, size: stat.size, mtime: Math.floor(stat.mtimeMs),
+      subproject: localSubproject,
+    };
 
     // Cheapest possible exit: the caller already knows this file and its stat is
     // identical. Nothing is read, hashed, or parsed.

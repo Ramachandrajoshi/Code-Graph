@@ -98,7 +98,7 @@ function renderSymbol(n, depth) {
 export function outlineDir(store, prefix, { depth = 1, budget = 0 } = {}) {
   const like = prefix ? `${prefix}/%` : '%';
   const files = store.all(
-    `SELECT path, lang, loc, tok, parsed FROM files
+    `SELECT path, lang, loc, tok, parsed, subproject FROM files
       WHERE path LIKE ? ORDER BY path`,
     like
   );
@@ -116,28 +116,39 @@ export function outlineDir(store, prefix, { depth = 1, budget = 0 } = {}) {
       continue;
     }
     const key = parts.slice(0, base + depth).join('/');
-    const g = groups.get(key) ?? { files: 0, tok: 0, loc: 0, langs: new Set() };
+    const g = groups.get(key) ?? { files: 0, tok: 0, loc: 0, langs: new Set(), subprojects: new Set() };
     g.files++; g.tok += f.tok; g.loc += f.loc;
     if (f.lang) g.langs.add(f.lang);
+    if (f.subproject) g.subprojects.add(f.subproject);
     groups.set(key, g);
   }
 
   const lines = [];
   for (const [dir, g] of [...groups].sort((a, b) => b[1].tok - a[1].tok)) {
     const langs = [...g.langs].slice(0, 3).join(',');
+    const subs = [...g.subprojects].slice(0, 3).join(', ');
     lines.push(
-      `${dir}/  ${g.files} files  ~${compactTokens(g.tok)}${langs ? '  ' + langs : ''}`
+      `${dir}/  ${g.files} files  ~${compactTokens(g.tok)}${langs ? '  ' + langs : ''}${subs ? '  [' + subs + ']' : ''}`
     );
   }
   for (const f of direct.sort((a, b) => b.tok - a.tok)) {
     const note = f.parsed ? '' : '  (not parsed)';
-    lines.push(`${f.path}  L${f.loc} ~${compactTokens(f.tok)}${note}`);
+    const sub = f.subproject ? `  [${f.subproject}]` : '';
+    lines.push(`${f.path}  L${f.loc} ~${compactTokens(f.tok)}${note}${sub}`);
   }
 
   const totalTok = files.reduce((a, f) => a + f.tok, 0);
   const header = `${prefix || '.'}  ${files.length} files  ~${compactTokens(totalTok)} total`;
 
-  const fitted = fitToBudget(lines, budget ? budget - estimate(header) : null);
+  // Surfaced once at the root: an agent orienting itself in a fleet-of-repos
+  // layout should see this before it starts reading directory groups one by
+  // one, not discover it piecemeal from per-group tags.
+  const subLine = !prefix ? (() => {
+    const all = store.listSubprojects();
+    return all.length ? [`sub-projects: ${all.join(', ')}`] : [];
+  })() : [];
+
+  const fitted = fitToBudget([...subLine, ...lines], budget ? budget - estimate(header) : null);
   const out = [header, ...fitted.lines];
   if (fitted.dropped) out.push(`... ${fitted.dropped} more entries`);
 

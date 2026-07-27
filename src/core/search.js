@@ -74,7 +74,7 @@ export function search(store, query, opts = {}) {
 
 function baseSelect(extra) {
   return `SELECT n.id, n.name, n.qname, n.kind, n.signature, n.doc, n.start_line,
-                 n.end_line, n.rank, n.is_exported, f.path, f.lang
+                 n.end_line, n.rank, n.is_exported, f.path, f.lang, f.subproject
             FROM nodes n JOIN files f ON f.id = n.file_id
            ${extra}`;
 }
@@ -134,7 +134,7 @@ function likeMatches(store, q) {
 
   return store.all(
     `SELECT n.id, n.name, n.qname, n.kind, n.signature, n.doc, n.start_line,
-            n.end_line, n.rank, n.is_exported, f.path, f.lang
+            n.end_line, n.rank, n.is_exported, f.path, f.lang, f.subproject
        FROM nodes n JOIN files f ON f.id = n.file_id
       WHERE n.kind != 'module' AND (${clauses.join(' OR ')})
       ORDER BY n.rank DESC
@@ -164,7 +164,7 @@ function ftsMatches(store, q) {
   try {
     return store.all(
       `SELECT n.id, n.name, n.qname, n.kind, n.signature, n.doc, n.start_line,
-              n.end_line, n.rank, n.is_exported, f.path, f.lang
+              n.end_line, n.rank, n.is_exported, f.path, f.lang, f.subproject
          FROM symbols_fts s
          JOIN fts_map m ON m.rowid = s.rowid
          JOIN nodes n ON n.id = m.node_id
@@ -191,7 +191,7 @@ function trigramMatches(store, q) {
 
   return store.all(
     `SELECT n.id, n.name, n.qname, n.kind, n.signature, n.doc, n.start_line,
-            n.end_line, n.rank, n.is_exported, f.path, f.lang
+            n.end_line, n.rank, n.is_exported, f.path, f.lang, f.subproject
        FROM trigrams t
        JOIN nodes n ON n.id = t.node_id
        JOIN files f ON f.id = n.file_id

@@ -46,6 +46,9 @@ export class Store {
     this.db = db;
     this.file = file;
     this._stmts = new Map();
+    // Set true by migrate() when a migration that ran this call needs a full
+    // reindex to backfill a column it added (see schema.js's forceReindex note).
+    this.needsFullReindex = false;
   }
 
   static async open(file, { create = true } = {}) {
@@ -154,6 +157,7 @@ export class Store {
            ON CONFLICT(key) DO UPDATE SET value = excluded.value`
         );
         this.db.exec('COMMIT');
+        if (m.forceReindex) this.needsFullReindex = true;
       } catch (err) {
         this.db.exec('ROLLBACK');
         throw new Error(`Migration ${m.version} (${m.name}) failed: ${err.message}`);
@@ -291,18 +295,30 @@ export class Store {
 
   upsertFile(f) {
     this.run(
-      `INSERT INTO files(path, lang, pack, hash, mtime, size, loc, tok, parsed, skip_reason, indexed_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO files(path, lang, pack, hash, mtime, size, loc, tok, parsed, skip_reason, subproject, indexed_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
          lang = excluded.lang, pack = excluded.pack, hash = excluded.hash,
          mtime = excluded.mtime, size = excluded.size, loc = excluded.loc,
          tok = excluded.tok, parsed = excluded.parsed,
-         skip_reason = excluded.skip_reason, indexed_at = excluded.indexed_at`,
+         skip_reason = excluded.skip_reason, subproject = excluded.subproject,
+         indexed_at = excluded.indexed_at`,
       f.path, f.lang ?? null, f.pack ?? null, f.hash, f.mtime, f.size,
       f.loc ?? 0, f.tok ?? 0, f.parsed ? 1 : 0, f.skipReason ?? null,
-      f.indexedAt ?? Date.now()
+      f.subproject ?? null, f.indexedAt ?? Date.now()
     );
     return this.getFileByPath(f.path).id;
+  }
+
+  /**
+   * Distinct nested-repo boundaries found during the walk, as repo-relative
+   * paths (e.g. 'frontend', 'services/orders'). Empty for an ordinary
+   * single-repo project.
+   */
+  listSubprojects() {
+    return this.all(
+      'SELECT DISTINCT subproject FROM files WHERE subproject IS NOT NULL ORDER BY subproject'
+    ).map((r) => r.subproject);
   }
 
   /**

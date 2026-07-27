@@ -9,6 +9,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { Store } from '../src/core/store.js';
 import { SCHEMA_VERSION } from '../src/core/schema.js';
 
@@ -33,6 +36,45 @@ test('migrations are idempotent across reopens', async () => {
   store.migrate();
   assert.equal(Number(store.getMeta('schema_version')), SCHEMA_VERSION);
   store.close();
+});
+
+test('upsertFile round-trips subproject', async () => {
+  const store = await Store.memory();
+  store.upsertFile({
+    path: 'frontend/src/a.ts', lang: 'typescript', pack: 'typescript',
+    hash: 'h1', mtime: 1, size: 10, loc: 3, tok: 5, parsed: 1,
+    subproject: 'frontend',
+  });
+  assert.equal(store.getFileByPath('frontend/src/a.ts').subproject, 'frontend');
+  assert.deepEqual(store.listSubprojects(), ['frontend']);
+  store.close();
+});
+
+test('listSubprojects ignores files with no subproject', async () => {
+  const { store } = await fixture(); // subproject omitted
+  assert.deepEqual(store.listSubprojects(), []);
+  store.close();
+});
+
+test('a migration with forceReindex sets needsFullReindex only on the crossing call', async () => {
+  // Store.memory() is always a fresh database, so every migration — including
+  // the v3 'subprojects' migration, which is marked forceReindex — runs on
+  // this very call.
+  const fresh = await Store.memory();
+  assert.equal(fresh.needsFullReindex, true, 'crossing the migration sets the flag');
+  fresh.close();
+
+  // A file-backed database already at the current version, on the other
+  // hand, must not re-set it on a later open: the migration loop skips any
+  // version already applied, so the forceReindex branch never runs again.
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-store-')), 'index.db');
+  const first = await Store.open(file);
+  assert.equal(first.needsFullReindex, true);
+  first.close();
+
+  const second = await Store.open(file);
+  assert.equal(second.needsFullReindex, false, 'reopening an up-to-date database must not force a reindex');
+  second.close();
 });
 
 test('upsertFile inserts once and updates in place', async () => {

@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { walk } from '../src/core/walker.js';
 import { DEFAULTS } from '../src/core/config.js';
+import { Store } from '../src/core/store.js';
+import { Indexer } from '../src/core/indexer.js';
 
 const require = createRequire(import.meta.url);
 const skip = (() => {
@@ -113,6 +115,42 @@ test('touching a file without editing it does not re-parse it', opts, () => {
     assert.match(output, /unchanged/, 'a touch must not count as a change');
     // Anchored: an unanchored /changed\s+\d/ also matches "unchanged   2".
     assert.ok(!/^\s*changed\s+[1-9]/m.test(output), `expected no changes, got:\n${output}`);
+  } finally { cleanup(root); }
+});
+
+test('needsFullReindex forces a repersist even for stat-unchanged files', async () => {
+  // A schema migration that adds a column (like `files.subproject`) can only be
+  // backfilled by re-walking the repo. Without Indexer.run() honoring
+  // store.needsFullReindex, a file whose bytes never change again would keep
+  // whatever value it had before the migration — null, forever.
+  const root = makeRepo({ 'frontend/.git/HEAD': 'ref: refs/heads/main\n', 'frontend/src/a.ts': '1' });
+  try {
+    const config = { ...DEFAULTS, ignore: [], root, dir: path.join(root, '.cgraph'), db: path.join(root, '.cgraph', 'index.db') };
+    const store = await Store.open(config.db);
+    await new Indexer({ store, config }).run({});
+    assert.equal(store.getFileByPath('frontend/src/a.ts').subproject, 'frontend', 'first run records the subproject');
+
+    // Simulate the pre-migration state a real upgrade would find: the column
+    // has a value from before, and nothing on disk has changed since.
+    store.run("UPDATE files SET subproject = NULL");
+
+    // Without the flag, the stat/hash fast path must leave it null — this is
+    // the bug the fix exists to close.
+    store.needsFullReindex = false;
+    await new Indexer({ store, config }).run({});
+    assert.equal(store.getFileByPath('frontend/src/a.ts').subproject, null,
+      'control: the ordinary incremental path does not touch unchanged files');
+
+    // With the flag set — exactly what a real forceReindex migration leaves
+    // behind on the crossing Store.open() call — the same no-op-on-disk run
+    // must still repersist every file.
+    store.needsFullReindex = true;
+    const stats = await new Indexer({ store, config }).run({});
+    assert.equal(stats.unchanged, 0, 'the fast path must be fully bypassed for this one pass');
+    assert.equal(store.getFileByPath('frontend/src/a.ts').subproject, 'frontend',
+      'the forced pass backfills subproject even though nothing on disk changed');
+
+    store.close();
   } finally { cleanup(root); }
 });
 

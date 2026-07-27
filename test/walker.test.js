@@ -196,3 +196,78 @@ test('readContent:false skips reading file bodies', () => {
     assert.ok(files[0].hash.startsWith('stat:'), 'stat-only mode uses a cheap hash');
   });
 });
+
+// -- sub-project detection --------------------------------------------------
+// A root that bundles several independently-cloned repos (a frontend/backend
+// fleet, each its own git checkout) should have its files labeled by which
+// nested repo they belong to, without needing a stack: a deeper boundary
+// always simply overwrites an outer one.
+
+const subOf = (root, config) =>
+  Object.fromEntries([...walk(root, config ?? testConfig(root))].map((f) => [f.rel, f.subproject]));
+
+test('a nested .git directory marks a subproject boundary', () => {
+  withRepo({
+    'frontend/.git/HEAD': 'ref: refs/heads/main\n',
+    'frontend/src/app.ts': '1',
+    'backend/.git/HEAD': 'ref: refs/heads/main\n',
+    'backend/Program.cs': '2',
+    'root.txt': '3',
+  }, (root) => {
+    const subs = subOf(root);
+    assert.equal(subs['frontend/src/app.ts'], 'frontend');
+    assert.equal(subs['backend/Program.cs'], 'backend');
+    assert.equal(subs['root.txt'], null, 'files directly under the walked root have no subproject');
+  });
+});
+
+test('a nested .git file (worktree/submodule pointer) also marks a boundary', () => {
+  withRepo({
+    'frontend/.git': 'gitdir: ../.git/worktrees/frontend\n',
+    'frontend/src/app.ts': '1',
+  }, (root) => {
+    assert.equal(subOf(root)['frontend/src/app.ts'], 'frontend');
+  });
+});
+
+test('a deeper nested repo overrides an outer one', () => {
+  withRepo({
+    'services/.git/HEAD': 'ref: refs/heads/main\n',
+    'services/shared.ts': '1',
+    'services/orders/.git/HEAD': 'ref: refs/heads/main\n',
+    'services/orders/index.ts': '2',
+  }, (root) => {
+    const subs = subOf(root);
+    assert.equal(subs['services/shared.ts'], 'services');
+    assert.equal(subs['services/orders/index.ts'], 'services/orders');
+  });
+});
+
+test('the walked root\'s own .git is not treated as a subproject of itself', () => {
+  withRepo({ '.git/HEAD': 'ref: refs/heads/main\n', 'a.js': '1' }, (root) => {
+    assert.equal(subOf(root)['a.js'], null);
+  });
+});
+
+test('detectSubprojects: false disables boundary detection', () => {
+  withRepo({
+    'frontend/.git/HEAD': 'ref: refs/heads/main\n',
+    'frontend/src/app.ts': '1',
+  }, (root) => {
+    const config = testConfig(root, { detectSubprojects: false });
+    assert.equal(subOf(root, config)['frontend/src/app.ts'], null);
+  });
+});
+
+test('a nested repo\'s .git/info/exclude is honored like a .gitignore found there', () => {
+  withRepo({
+    'frontend/.git/HEAD': 'ref: refs/heads/main\n',
+    'frontend/.git/info/exclude': 'local-only.js\n',
+    'frontend/local-only.js': '1',
+    'frontend/kept.js': '2',
+  }, (root) => {
+    const p = paths(root);
+    assert.ok(!p.includes('frontend/local-only.js'), 'nested repo\'s local exclude should apply');
+    assert.ok(p.includes('frontend/kept.js'));
+  });
+});

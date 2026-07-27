@@ -169,6 +169,25 @@ test('running init twice is safe', opts, () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('reports nested repos as sub-projects during init', opts, () => {
+  // The motivating scenario: a root that bundles several independently-cloned
+  // repos (frontend/backend, each its own git checkout) rather than one
+  // single-repo project.
+  const root = makeRepo({
+    ...BASE,
+    'frontend/.git/HEAD': 'ref: refs/heads/main\n',
+    'frontend/package.json': '{"name":"web","dependencies":{"@angular/core":"^17.0.0"}}',
+    'backend/.git/HEAD': 'ref: refs/heads/main\n',
+    'backend/App.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>',
+  });
+  try {
+    const output = init(root);
+    assert.match(output, /sub-projects/);
+    assert.match(output, /frontend\s+node\s+.*angular/);
+    assert.match(output, /backend\s+dotnet\s+.*aspnet/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('reports language coverage gaps during init', opts, () => {
   // A user whose main language has no queries should learn it immediately, not
   // by wondering later why find returns nothing.

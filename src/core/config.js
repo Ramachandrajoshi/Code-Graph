@@ -48,6 +48,11 @@ export const DEFAULTS = {
   // Parser worker count. 0 means "cpus - 1, at least 1".
   workers: 0,
 
+  // Label files by which nested `.git` repo they belong to, for a root that
+  // bundles several independently-cloned repos (e.g. a frontend/backend/desktop
+  // fleet). Off switch for layouts where this would just add noise.
+  detectSubprojects: true,
+
   // Language packs explicitly enabled/disabled. Empty `enable` means autodetect.
   packs: { enable: [], disable: [] },
 

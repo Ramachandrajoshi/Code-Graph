@@ -9,9 +9,16 @@
  * backticks. A backtick in a SQL comment silently terminates the string and
  * produces a confusing syntax error far from its cause. `test/schema.test.js`
  * enforces this.
+ *
+ * A migration may set `forceReindex: true` when it adds a column that can
+ * only be populated by re-walking the repo (not by the ALTER TABLE itself).
+ * `Store.migrate()` surfaces this as `store.needsFullReindex`, which
+ * `Indexer.run()` uses to force one full pass so the new column gets backfilled
+ * instead of staying null forever on files the incremental fast path never
+ * touches again.
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const MIGRATIONS = [
   {
@@ -213,6 +220,24 @@ CREATE INDEX idx_refs_name ON refs(name);
 -- Resolution looks up every file that imports a given specifier, so the reverse
 -- lookup has to be cheap.
 CREATE INDEX idx_imports_spec ON imports(spec);
+`,
+  },
+
+  {
+    version: 3,
+    name: 'subprojects',
+    // Backfilling existing rows requires re-walking the repo (to find nested
+    // .git boundaries), which a migration cannot do — it only shapes the
+    // schema. See the forceReindex note above.
+    forceReindex: true,
+    up: `
+--------------------------------------------------------------------------------
+-- Sub-project labeling: which nested repo (if any) a file belongs to, for a
+-- root that contains a fleet of independently-cloned repos (e.g. a
+-- frontend/backend/desktop split, each its own git checkout).
+--------------------------------------------------------------------------------
+ALTER TABLE files ADD COLUMN subproject TEXT;
+CREATE INDEX idx_files_subproject ON files(subproject);
 `,
   },
 ];

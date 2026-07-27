@@ -19,6 +19,7 @@ import { loadConfig, saveConfig, projectDir } from '../../core/config.js';
 import { Store } from '../../core/store.js';
 import { Indexer } from '../../core/indexer.js';
 import { PackRegistry } from '../../packs/registry.js';
+import { detectSubprojectTechnologies } from '../../packs/technologies.js';
 import {
   AGENTS, AGENT_IDS, selectAgents, registerMcp, writeInstructions, instructionFilesFor,
 } from '../../agents.js';
@@ -60,6 +61,23 @@ export async function run(args) {
       const parts = [tech.stacks.join(', ')];
       if (tech.frameworks.length) parts.push(tech.frameworks.join(', '));
       out(`  detected  ${parts.join('  ·  ')}`);
+    }
+
+    // A root that bundles several independently-cloned repos (fleet of
+    // microservices) gets each one labeled here, so a wrong or missing
+    // detection is visible immediately rather than surfacing later as an agent
+    // confusing one stack's conventions for another's.
+    const subprojectPaths = store.listSubprojects();
+    if (subprojectPaths.length) {
+      const perSub = detectSubprojectTechnologies(root, subprojectPaths);
+      out('');
+      out('  sub-projects');
+      for (const rel of subprojectPaths) {
+        const t = perSub[rel];
+        const parts = [t.stacks.join(', ') || '(unknown)'];
+        if (t.frameworks.length) parts.push(t.frameworks.join(', '));
+        out(`    ${rel.padEnd(10)} ${parts.join('  ·  ')}`);
+      }
     }
 
     const s = store.stats();

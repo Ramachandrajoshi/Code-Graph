@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-27
 ### Added
 - **JSON, CSS, HTML, and Bash language packs.** JSON object keys and CSS
   rules/keyframes become nested symbols the same way code does; HTML surfaces
@@ -219,7 +220,8 @@ Initial release.
 - The `elm` and `ql` grammars are broken in that release and are refused with an
   explanatory message rather than an empty one.
 
-[Unreleased]: https://github.com/Ramachandrajoshi/Code-Graph/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Ramachandrajoshi/Code-Graph/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.2.4

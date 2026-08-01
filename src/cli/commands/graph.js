@@ -50,9 +50,10 @@ export async function run(args) {
       case 'importers': renderImporters(store, node, lines); break;
       case 'impact':    renderImpact(store, node, args, lines); break;
       case 'path':      renderPath(store, node, args, lines); break;
+      case 'explore':   renderExplore(store, node, args, lines); break;
       default:
         throw new Error(
-          `unknown --dir '${dir}'. Use: callers, callees, importers, impact, path`
+          `unknown --dir '${dir}'. Use: callers, callees, importers, impact, path, explore`
         );
     }
 
@@ -194,6 +195,49 @@ function renderImpact(store, node, args, lines) {
   }
 }
 
+/**
+ * Both directions of a symbol's calling context in one pass: who calls it
+ * (bottom-up) and what it calls (top-down), each with exact start-end line
+ * ranges so a caller/callee body can be jumped to without a second lookup.
+ */
+function renderExplore(store, node, args, lines) {
+  const d = degree(store, node.id);
+  lines.push(`${node.qname}  ${node.path}:${node.start_line}-${node.end_line}`);
+  lines.push('');
+
+  const callerRows = callers(store, node.id, {
+    limit: args.limit ?? 30,
+    minConfidence: args.exact ? 'EXACT' : null,
+  });
+  lines.push(`called from (bottom-up, ${d.callers}):`);
+  if (!callerRows.length) {
+    lines.push('  (no callers found — an entry point, dead code, or called dynamically)');
+  } else {
+    for (const r of callerRows) {
+      const times = r.sites > 1 ? ` (${r.sites}x)` : '';
+      lines.push(`${confMark(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}${times}`);
+    }
+  }
+
+  lines.push('');
+  const { internal, external } = callees(store, node.id, { limit: args.limit ?? 30 });
+  lines.push(`calls (top-down, ${d.callees}):`);
+  if (!internal.length && !external.length) {
+    lines.push('  (calls nothing this index knows about)');
+  } else {
+    for (const r of internal) {
+      lines.push(`${confMark(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}`);
+    }
+    if (external.length) {
+      lines.push('  external:');
+      for (const r of external) {
+        const sym = r.symbol ? `.${r.symbol}` : '';
+        lines.push(`    ${r.package}${sym}  (${r.ecosystem})`);
+      }
+    }
+  }
+}
+
 function renderPath(store, node, args, lines) {
   const toName = args._[1] ?? args.to;
   if (!toName) throw new Error('graph --dir path: give a destination symbol as the second argument');
@@ -220,12 +264,13 @@ ${color.bold('cgraph graph')} — traverse relationships between symbols
 
   cgraph graph login                       Who calls login
   cgraph graph login --dir callees         What login calls
+  cgraph graph login --dir explore         Both, with exact start-end line ranges
   cgraph graph login --dir impact          What breaks if login changes
   cgraph graph login --dir importers       Which files import login's file
   cgraph graph handler --dir path saveUser How handler reaches saveUser
 
 ${color.bold('OPTIONS')}
-  --dir <d>     callers | callees | importers | impact | path
+  --dir <d>     callers | callees | importers | impact | path | explore
   --depth <n>   Traversal depth (impact default 3, path default 8)
   --limit <n>   Maximum results
   --exact       Only proven edges; hide name-match guesses

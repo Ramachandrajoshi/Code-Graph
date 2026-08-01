@@ -202,6 +202,22 @@ test('graph rejects an unknown direction', opts, () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('graph explore shows callers and callees with exact line ranges', opts, () => {
+  const root = setup();
+  try {
+    const output = run(root, ['graph', 'handleLogin', '--dir', 'explore']);
+    // handleLogin's own definition is on lines 5-7 of src/auth.js.
+    assert.match(output, /handleLogin\s+src[\\/]auth\.js:5-7/, 'target symbol carries its own start-end range');
+    assert.match(output, /called from \(bottom-up/);
+    assert.match(output, /postLogin/, 'postLogin calls handleLogin');
+    assert.match(output, /calls \(top-down/);
+    assert.match(output, /findUser/, 'handleLogin calls findUser');
+    // Both the caller and callee lines carry a start-end range, not just a start line.
+    assert.match(output, /postLogin\s+src[\\/]api\.js:\d+-\d+/);
+    assert.match(output, /findUser\s+src[\\/]db\.js:\d+-\d+/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('a symbol with no callers says so instead of printing nothing', opts, () => {
   const root = setup();
   try {

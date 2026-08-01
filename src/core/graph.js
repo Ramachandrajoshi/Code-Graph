@@ -10,7 +10,7 @@
  * guesses needs to be read differently from one built from proven edges.
  */
 
-const DIRECTIONS = new Set(['callers', 'callees', 'importers', 'imports', 'impact', 'path']);
+const DIRECTIONS = new Set(['callers', 'callees', 'importers', 'imports', 'impact', 'path', 'explore']);
 
 export function isValidDirection(dir) {
   return DIRECTIONS.has(dir);
@@ -31,7 +31,7 @@ export function callers(store, nodeId, { limit = 50, minConfidence = null } = {}
   // the whole caller INFERRED. MIN would let a single proven site launder the
   // rest into looking proven too.
   return store.all(
-    `SELECT n.id, n.qname, n.kind, n.start_line, n.rank, f.path,
+    `SELECT n.id, n.qname, n.kind, n.start_line, n.end_line, n.rank, f.path,
             MIN(e.line) AS line, COUNT(*) AS sites,
             MAX(e.confidence) AS confidence, MIN(e.kind) AS edge_kind
        FROM edges e
@@ -48,7 +48,7 @@ export function callers(store, nodeId, { limit = 50, minConfidence = null } = {}
 /** What this symbol calls. */
 export function callees(store, nodeId, { limit = 50 } = {}) {
   const internal = store.all(
-    `SELECT DISTINCT n.id, n.qname, n.kind, n.start_line, n.rank,
+    `SELECT DISTINCT n.id, n.qname, n.kind, n.start_line, n.end_line, n.rank,
             f.path, e.confidence, e.kind AS edge_kind, e.line
        FROM edges e
        JOIN nodes n ON n.id = e.dst_id

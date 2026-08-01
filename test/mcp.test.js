@@ -202,6 +202,21 @@ test('graph reports callers', opts, async () => {
   } finally { fx.cleanup(); }
 });
 
+test('graph explore combines callers and callees with line ranges', opts, async () => {
+  const fx = await buildFixture(REPO);
+  try {
+    const { responses } = await session(fx.root, [
+      INIT,
+      { jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'graph', arguments: { symbol: 'handleLogin', direction: 'explore' } } },
+    ]);
+    const text = responses.find((r) => r.id === 2).result.content[0].text;
+    assert.match(text, /called from \(bottom-up/);
+    assert.match(text, /calls \(top-down/);
+    assert.match(text, /findUser\s+src[\\/]db\.js:1-1/, 'callee carries an exact start-end range');
+  } finally { fx.cleanup(); }
+});
+
 test('read returns one symbol body', opts, async () => {
   const fx = await buildFixture(REPO);
   try {

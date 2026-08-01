@@ -279,8 +279,27 @@ function toolGraph(store, config, args, ledger) {
       lines.push(`${rows.length - 1} hops:`, '');
       rows.forEach((r, i) => lines.push(`  ${i === 0 ? ' ' : '->'} ${r.qname}  ${r.path}:${r.start_line}`));
     }
+  } else if (direction === 'explore') {
+    const d = degree(store, node.id);
+    lines.push(`${node.qname}  ${node.path}:${node.start_line}-${node.end_line}`, '');
+
+    const callerRows = callers(store, node.id, { limit: args.limit ?? 30, minConfidence: args.exact ? 'EXACT' : null });
+    lines.push(`called from (bottom-up, ${d.callers}):`);
+    if (!callerRows.length) lines.push('  (no callers — entry point, dead code, or called dynamically)');
+    for (const r of callerRows) {
+      lines.push(`${r.confidence === 'EXACT' ? ' ' : '!'} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
+    }
+
+    const { internal, external } = callees(store, node.id, { limit: args.limit ?? 30 });
+    lines.push('', `calls (top-down, ${d.callees}):`);
+    if (!internal.length && !external.length) lines.push('  (calls nothing this index knows about)');
+    for (const r of internal) lines.push(`${r.confidence === 'EXACT' ? ' ' : '!'} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}`);
+    if (external.length) {
+      lines.push('  external:');
+      for (const r of external) lines.push(`    ${r.package}${r.symbol ? '.' + r.symbol : ''} (${r.ecosystem})`);
+    }
   } else {
-    return errorResult(`Unknown direction '${direction}'. Use callers, callees, importers, impact, or path.`);
+    return errorResult(`Unknown direction '${direction}'. Use callers, callees, importers, impact, path, or explore.`);
   }
 
   const fitted = fitToBudget(lines, budgetOf(config, args));

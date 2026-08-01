@@ -91,8 +91,10 @@ export function toolDefinitions({ embeddingsEnabled = false } = {}) {
           symbol: { type: 'string' },
           direction: {
             type: 'string',
-            enum: ['callers', 'callees', 'importers', 'impact', 'path'],
-            description: 'impact = everything transitively affected by changing it.',
+            enum: ['callers', 'callees', 'importers', 'impact', 'path', 'explore'],
+            description:
+              'impact = everything transitively affected by changing it. ' +
+              'explore = callers and callees together, each with exact start-end line ranges.',
           },
           to: { type: 'string', description: 'Destination, for direction=path.' },
           depth: { type: 'integer' },

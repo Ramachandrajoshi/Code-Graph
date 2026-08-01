@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.5.0] — 2026-08-01
+### Changed
+- **`map` and `graph` are merged into one MCP tool.** Pass `path` for a
+  structural outline or `symbol` for relationships (callers, callees,
+  importers, impact, path, explore) — never both. `read` and `status` are no
+  longer separate MCP tools (an agent's own file reader and the automatic
+  per-call refresh already cover them); both remain available from the shell
+  as `cgraph read` and `cgraph stats`. MCP responses are no longer truncated
+  to a default token budget — every tool still accepts an explicit `budget`
+  to cap output on request.
+
 ### Removed
 - **The `docs` tool and dependency-doc extraction (`src/deps/`).** Reading
   `node_modules`/`site-packages`/NuGet/Maven and fetching registry artifacts to
@@ -245,7 +257,8 @@ Initial release.
 - The `elm` and `ql` grammars are broken in that release and are refused with an
   explanatory message rather than an empty one.
 
-[Unreleased]: https://github.com/Ramachandrajoshi/Code-Graph/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Ramachandrajoshi/Code-Graph/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.3.0
 [0.2.5]: https://github.com/Ramachandrajoshi/Code-Graph/releases/tag/v0.2.5

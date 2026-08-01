@@ -31,6 +31,7 @@ export async function run(args) {
         qname: h.node.qname, path: h.node.path, line: h.node.start_line,
         kind: h.node.kind, signature: h.node.signature, rank: h.node.rank,
         score: h.final, why: h.why, subproject: h.node.subproject,
+        skipReason: h.node.skipReason,
       })));
     }
 

@@ -110,6 +110,22 @@ function looksBinary(buf) {
 }
 
 /**
+ * Image formats: never parseable, never worth a byte of content. Detected by
+ * extension, not by reading the file, because reading is exactly the cost
+ * this exists to avoid — a repo with a handful of multi-megabyte icon sets or
+ * design assets otherwise pays a full read + sha256 for every one of them on
+ * every walk, for a stub that carries no content anyway.
+ */
+const IMAGE_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.cur', '.icns',
+  '.webp', '.tiff', '.tif', '.avif', '.heic', '.heif',
+]);
+
+function isImage(rel) {
+  return IMAGE_EXTENSIONS.has(path.extname(rel).toLowerCase());
+}
+
+/**
  * Detect machine-written files that are technically source but worthless to
  * index: minified bundles, generated clients, compiled protobufs. They produce
  * thousands of nodes nobody will ever query and drown out real symbols.
@@ -256,6 +272,14 @@ function* walkDir(root, dirRel, stack, subprojectRel, config, readContent, isUnc
 
     if (stat.size > config.maxFileBytes) {
       yield { ...base, hash: `size:${stat.size}:${base.mtime}`, skipReason: 'too-large' };
+      continue;
+    }
+
+    // Same cheap stat-only exit as too-large, taken before any read: an image's
+    // bytes are never going to be parsed, so there is nothing content-based left
+    // to check for it.
+    if (isImage(rel)) {
+      yield { ...base, hash: `stat:${stat.size}:${base.mtime}`, skipReason: 'image' };
       continue;
     }
 

@@ -118,12 +118,36 @@ test('.git directory is never walked', () => {
 });
 
 test('binary files are yielded as stubs, not dropped', () => {
-  withRepo({ 'logo.png': 'PNG\x00\x01\x02binary', 'a.js': '1' }, (root) => {
+  // A non-image extension: images now take a separate, earlier fast path
+  // (see the 'images are skipped by extension' test below) and never reach
+  // the NUL-byte sniff this test is about.
+  withRepo({ 'data.bin': 'BIN\x00\x01\x02binary', 'a.js': '1' }, (root) => {
     const files = [...walk(root, testConfig(root))];
-    const png = files.find((f) => f.rel === 'logo.png');
-    assert.equal(png.skipReason, 'binary', 'binary content should be detected');
-    assert.equal(png.content, undefined, 'binary content is not retained');
+    const bin = files.find((f) => f.rel === 'data.bin');
+    assert.equal(bin.skipReason, 'binary', 'binary content should be detected');
+    assert.equal(bin.content, undefined, 'binary content is not retained');
     assert.ok(files.some((f) => f.rel === 'a.js' && !f.skipReason));
+  });
+});
+
+test('images are skipped by extension, without their bytes ever being read', () => {
+  withRepo({ 'favicon.ico': '\x00\x00\x01\x00binarystuff', 'logo.png': 'PNGDATA', 'a.js': '1' }, (root) => {
+    const files = [...walk(root, testConfig(root))];
+    const ico = files.find((f) => f.rel === 'favicon.ico');
+    const png = files.find((f) => f.rel === 'logo.png');
+    assert.equal(ico.skipReason, 'image');
+    assert.equal(ico.content, undefined, 'image content is never read');
+    assert.ok(ico.hash.startsWith('stat:'), 'image stub uses the cheap stat-based hash, not a content hash');
+    assert.equal(png.skipReason, 'image');
+    assert.ok(files.some((f) => f.rel === 'a.js' && !f.skipReason));
+  });
+});
+
+test('an oversized image is reported as too-large, not image', () => {
+  withRepo({ 'huge.png': 'x'.repeat(5000) }, (root) => {
+    const config = testConfig(root, { maxFileBytes: 1000 });
+    const files = [...walk(root, config)];
+    assert.equal(files.find((f) => f.rel === 'huge.png').skipReason, 'too-large');
   });
 });
 

@@ -74,8 +74,29 @@ export async function run(args) {
 
 function resolveOne(store, target) {
   const matches = findSymbol(store, target, { limit: 5 });
-  if (!matches.length) throw new Error(`No symbol named '${target}'. Try \`cgraph find ${target}\`.`);
-  return matches[0];
+  if (matches.length) return matches[0];
+
+  // A miss here is ambiguous: is the file not in the index, or is it indexed
+  // but has nothing graph traversal can walk (an image, a config file, a
+  // binary)? The two need different next steps, so tell them apart rather
+  // than sending every miss to the same generic suggestion.
+  const file = findFileByName(store, target);
+  if (file) {
+    const reason = file.skip_reason ? ` (${file.skip_reason})` : '';
+    throw new Error(
+      `'${target}' is indexed but has no symbols${reason} — graph traversal needs one. ` +
+        `Try \`cgraph map ${file.path}\` to see what it contains.`
+    );
+  }
+
+  throw new Error(`No symbol named '${target}'. Try \`cgraph find ${target}\`.`);
+}
+
+function findFileByName(store, target) {
+  return store.get(
+    `SELECT path, skip_reason FROM files WHERE path = ? OR path LIKE '%/' || ? LIMIT 1`,
+    target, target
+  );
 }
 
 /** `!` marks an inferred edge, so a reader never mistakes a guess for a fact. */

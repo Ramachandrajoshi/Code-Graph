@@ -98,7 +98,7 @@ function renderSymbol(n, depth) {
 export function outlineDir(store, prefix, { depth = 1, budget = 0 } = {}) {
   const like = prefix ? `${prefix}/%` : '%';
   const files = store.all(
-    `SELECT path, lang, loc, tok, parsed, subproject FROM files
+    `SELECT path, lang, loc, tok, parsed, subproject, skip_reason FROM files
       WHERE path LIKE ? ORDER BY path`,
     like
   );
@@ -132,7 +132,10 @@ export function outlineDir(store, prefix, { depth = 1, budget = 0 } = {}) {
     );
   }
   for (const f of direct.sort((a, b) => b.tok - a.tok)) {
-    const note = f.parsed ? '' : '  (not parsed)';
+    // The reason, not just the fact of skipping: an agent (or a human staring
+    // at a run that "got stuck") should be able to tell an intentionally
+    // skipped image from a parse failure without a separate `doctor` call.
+    const note = f.parsed ? '' : `  (${f.skip_reason ?? 'not parsed'})`;
     const sub = f.subproject ? `  [${f.subproject}]` : '';
     lines.push(`${f.path}  L${f.loc} ~${compactTokens(f.tok)}${note}${sub}`);
   }

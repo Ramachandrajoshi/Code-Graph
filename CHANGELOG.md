@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **Images are recognized by extension and never read.** `.png`, `.ico`,
+  `.jpg`, and similar formats used to be read fully into memory and hashed
+  before the binary sniff threw them away, which made `index`/`update` look
+  stuck on large icon sets or design assets for no reason. They now take the
+  same stat-only fast path as oversized files, tagged with a distinct
+  `image` skip reason (visible in `update`'s "skipped by reason" and in
+  `doctor`) instead of being folded into the generic `binary` count.
+- **Unparsed files are findable again.** `find` only ever searched symbols,
+  so a file with none — an image, a binary, anything skipped as too-large,
+  minified, or generated — was invisible to it even though the index knew it
+  existed; `map` already listed such files but didn't say why they weren't
+  parsed. `find <name>` now also matches on the path of unparsed files, `map`
+  annotates each with its skip reason (e.g. `(image)`, `(too-large)`) instead
+  of a bare `(not parsed)`, and `graph` gives a specific error when a target
+  is an indexed file with no symbols rather than reporting it as unknown.
 
 ## [0.4.0] — 2026-07-27
 ### Added

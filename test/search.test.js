@@ -225,6 +225,41 @@ test('FTS5 availability is recorded so doctor can report it', async () => {
   } finally { on.close(); }
 });
 
+// ------------------------------------------------- files with no symbols
+
+/**
+ * Images, binaries, oversized files and the like never produce a `nodes`
+ * row, so every strategy above is blind to them. `find` still has to be able
+ * to answer "where is favicon.ico" instead of reporting it doesn't exist.
+ */
+test('an unparsed file (e.g. a skipped image) is still findable by name', async () => {
+  const { Store } = await import('../src/core/store.js');
+  const store = await Store.memory();
+  try {
+    store.upsertFile({
+      path: 'public/favicon.ico', lang: null, pack: null,
+      hash: 'h', mtime: 1, size: 100, loc: 0, tok: 0, parsed: 0,
+      skipReason: 'image',
+    });
+
+    const hits = search(store, 'favicon');
+    assert.ok(hits.length, 'expected a hit for an unparsed image file');
+    const hit = hits[0];
+    assert.equal(hit.node.kind, 'file');
+    assert.equal(hit.node.path, 'public/favicon.ico');
+    assert.equal(hit.node.skipReason, 'image');
+  } finally { store.close(); }
+});
+
+test('a parsed file with symbols is not double-reported as a bare file match', async () => {
+  const store = await noFtsStore();
+  try {
+    const hits = search(store, 'handleLogin');
+    const fileHits = hits.filter((h) => h.node.kind === 'file');
+    assert.equal(fileHits.length, 0, 'a parsed file should be reached through its symbols, not as a file row');
+  } finally { store.close(); }
+});
+
 // ---------------------------------------------------------------- traversal
 
 test('callers finds who calls a symbol', opts, async () => {

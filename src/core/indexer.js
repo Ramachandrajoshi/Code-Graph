@@ -214,7 +214,7 @@ export class Indexer {
 
     // Skips that follow from the file's own bytes stay valid as long as the
     // bytes do.
-    const contentDerived = ['binary', 'too-large', 'minified', 'generated', 'no-language'];
+    const contentDerived = ['binary', 'too-large', 'minified', 'generated', 'no-language', 'image'];
     if (contentDerived.includes(prior.skip_reason)) return true;
 
     // 'no-queries' and 'parse-error' depend on the packs in play, so they are

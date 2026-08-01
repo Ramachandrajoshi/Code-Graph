@@ -53,6 +53,13 @@ export function search(store, query, opts = {}) {
   // implementations and the caller cannot tell which ran.
   for (const row of textMatches(store, q)) add(row, 25, 'text');
   for (const row of trigramMatches(store, q)) add(row, 10, 'fuzzy');
+  // Files with no symbols (images, binaries, oversized, generated, ...) are
+  // invisible to every strategy above, since those all query `nodes`. Without
+  // this, `find` reports "no symbols matching" for a file the index knows
+  // perfectly well exists — the agent is told to look elsewhere for something
+  // that was in front of it. Scored below a real fuzzy symbol match so a file
+  // named after a query never buries the code that actually answers it.
+  for (const row of fileMatches(store, q)) add(row, 8, 'file');
 
   const filtered = [...scores.values()].filter(({ node }) => {
     if (kind && node.kind !== kind) return false;
@@ -180,6 +187,42 @@ function ftsMatches(store, q) {
   }
 }
 
+/**
+ * Path/name matches against files that carry no symbols at all.
+ *
+ * Deliberately scoped to `parsed = 0`: a file with symbols is already
+ * reachable through the strategies above, and matching its path too would
+ * mean every hit on a popular file name doubles up with a near-identical
+ * file-level row.
+ */
+function fileMatches(store, q) {
+  if (q.length < 2) return [];
+  const like = `%${q.replace(/[%_]/g, (c) => `\\${c}`)}%`;
+  const rows = store.all(
+    `SELECT id, path, lang, skip_reason, subproject FROM files
+      WHERE parsed = 0 AND path LIKE ? ESCAPE '\\'
+      ORDER BY path LIMIT 30`,
+    like
+  );
+  return rows.map((f) => ({
+    // Prefixed so this can never collide with a node id in the same score map.
+    id: `file:${f.id}`,
+    name: f.path.split('/').pop(),
+    qname: f.path,
+    kind: 'file',
+    signature: null,
+    doc: null,
+    start_line: null,
+    end_line: null,
+    rank: 0,
+    is_exported: 0,
+    path: f.path,
+    lang: f.lang,
+    subproject: f.subproject,
+    skipReason: f.skip_reason,
+  }));
+}
+
 /** Substring matches via trigram overlap — the fallback FTS cannot provide. */
 function trigramMatches(store, q) {
   const tris = trigrams(q.toLowerCase());
@@ -217,6 +260,13 @@ export function renderHits(hits, { showWhy = false } = {}) {
     const n = hit.node;
     const star = n.rank >= 0.5 ? '*' : ' ';
     const why = showWhy ? `  [${hit.why.join('+')}]` : '';
+
+    if (n.kind === 'file') {
+      const reason = n.skipReason ? `  (${n.skipReason})` : '';
+      lines.push(`${String(i++).padStart(2)}${star} ${n.path}  file${reason}${why}`);
+      continue;
+    }
+
     lines.push(
       `${String(i++).padStart(2)}${star} ${n.qname}  ${n.path}:${n.start_line}  ${n.kind}${why}`
     );

@@ -28,8 +28,6 @@ import { computeRanks } from './core/rank.js';
 import { search as searchSymbols, renderHits } from './core/search.js';
 import { outlineFile, outlineDir, findSymbol, readSymbol } from './core/retrieve.js';
 import * as graph from './core/graph.js';
-import { listDependencies, lookupDocs } from './deps/lookup.js';
-import { extractAllDocs } from './deps/extract.js';
 import { estimate, fitToBudget, UsageLedger } from './core/tokens.js';
 
 export {
@@ -39,8 +37,6 @@ export {
   Store, Indexer, PackRegistry, Resolver, computeRanks,
   // Retrieval
   outlineFile, outlineDir, findSymbol, readSymbol, renderHits,
-  // Dependencies
-  listDependencies, lookupDocs, extractAllDocs,
   // Token accounting
   estimate, fitToBudget, UsageLedger,
   // Graph traversal, namespaced to avoid colliding with a caller's `impact`
@@ -115,11 +111,6 @@ export async function openProject(root, options = {}) {
       if (!a || !b) return null;
       const ids = graph.shortestPath(store, a.id, b.id, opts);
       return ids ? graph.hydrate(store, ids) : null;
-    },
-
-    /** Dependencies ranked by how much this project uses them. */
-    dependencies(opts = {}) {
-      return listDependencies(store, opts);
     },
 
     /** Index counts and the cumulative savings ledger. */

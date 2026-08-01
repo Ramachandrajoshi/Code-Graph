@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Removed
+- **The `docs` tool and dependency-doc extraction (`src/deps/`).** Reading
+  `node_modules`/`site-packages`/NuGet/Maven and fetching registry artifacts to
+  build a usage-ranked API reference was a large, separately-maintained
+  subsystem better served by a dedicated docs MCP server (e.g.
+  [Context7](https://github.com/upstash/context7)). `cgraph docs`, the MCP
+  `docs` tool, and `openProject(...).dependencies()` are gone; `map`/`graph`
+  still show external call edges from the existing import graph.
+
 ### Added
 - **Images are recognized by extension and never read.** `.png`, `.ico`,
   `.jpg`, and similar formats used to be read fully into memory and hashed

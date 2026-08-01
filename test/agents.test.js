@@ -231,7 +231,7 @@ test('writeClaudeSettings pre-approves the MCP server and its tools', () => {
     const json = readJson(root, '.claude/settings.json');
     assert.equal(json.enableAllProjectMcpServers, true);
     assert.ok(json.enabledMcpjsonServers.includes('cgraph'));
-    for (const tool of ['status', 'map', 'find', 'read', 'graph', 'docs']) {
+    for (const tool of ['status', 'map', 'find', 'read', 'graph']) {
       assert.ok(
         json.permissions.allow.includes(`mcp__cgraph__${tool}`),
         `should pre-approve mcp__cgraph__${tool}`
@@ -292,7 +292,7 @@ test('running writeClaudeSettings twice changes nothing the second time', () => 
 
 test('the instruction block names the tools and the grep replacement', () => {
   const block = instructionBlock();
-  for (const tool of ['map', 'find', 'read', 'graph', 'docs', 'update']) {
+  for (const tool of ['map', 'find', 'read', 'graph', 'update']) {
     assert.match(block, new RegExp(`\\b${tool}\\b`), `should mention ${tool}`);
   }
   assert.match(block, /grep/, 'the behaviour being replaced must be named');

@@ -64,11 +64,11 @@ export const DEFAULTS = {
   // about files most repos don't expect to need a pack for.
   packs: { enable: [], disable: [], strict: false },
 
-  // Dependency documentation.
+  // Network policy. `offline` also gates tree-sitter grammar downloads
+  // (see packs/registry.js), so it stays even though dependency-doc
+  // extraction, its original reason for existing, has been removed.
   deps: {
-    enabled: true,
     offline: false,
-    maxPackages: 200,
   },
 
   // Embeddings are opt-in and off by default: a hosted provider costs money and
@@ -113,7 +113,7 @@ export const DEFAULTS = {
   },
 };
 
-/** Absolute path to the shared, machine-wide cache (grammars, dependency docs). */
+/** Absolute path to the shared, machine-wide cache (tree-sitter grammars). */
 export function userCacheDir() {
   if (process.env.CGRAPH_HOME) return path.resolve(process.env.CGRAPH_HOME);
   return path.join(os.homedir(), '.cgraph');

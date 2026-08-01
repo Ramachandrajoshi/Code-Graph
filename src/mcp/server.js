@@ -1,12 +1,12 @@
 /**
  * MCP server.
  *
- * Binds the seven tools to the retrieval layer. Two behaviours matter here
- * beyond plumbing:
+ * Binds the tools to the retrieval layer. Two behaviours matter here beyond
+ * plumbing:
  *
  *   1. Staleness is handled, not assumed away. An agent that trusts a stale
- *      index makes confident wrong edits, so `status` refreshes and every tool
- *      can report when the index has drifted.
+ *      index makes confident wrong edits, so every tool call triggers a
+ *      throttled refresh first, and answers say when the index has drifted.
  *   2. Errors return as readable tool results rather than protocol errors.
  *      A model can act on "no symbol named X, try find" — it cannot act on a
  *      JSON-RPC error code.
@@ -16,12 +16,11 @@ import { StdioServer, textResult, errorResult } from './protocol.js';
 import { toolDefinitions } from './tools.js';
 import { Store } from '../core/store.js';
 import { loadConfig } from '../core/config.js';
-import { outlineFile, outlineDir, findSymbol, readSymbol } from '../core/retrieve.js';
+import { outlineFile, outlineDir, findSymbol } from '../core/retrieve.js';
 import { search, renderHits } from '../core/search.js';
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../core/graph.js';
 import { degree } from '../core/rank.js';
 import { UsageLedger, fitToBudget } from '../core/tokens.js';
-import { lookupDocs, listDependencies } from '../deps/lookup.js';
 
 export async function createServer({ root, version }) {
   const config = loadConfig(root ?? process.cwd(), root ? { root } : {});
@@ -37,16 +36,12 @@ export async function createServer({ root, version }) {
     async callTool(name, args) {
       try {
         // Refresh before answering, so the agent never reads a graph that
-        // disagrees with the working tree. `status` does its own, explicitly.
-        if (name !== 'status') await refresher.maybe();
+        // disagrees with the working tree.
+        await refresher.maybe();
 
         switch (name) {
           case 'map':    return toolMap(store, config, args, ledger);
           case 'find':   return toolFind(store, config, args, ledger);
-          case 'read':   return toolRead(store, config, args, ledger);
-          case 'graph':  return toolGraph(store, config, args, ledger);
-          case 'docs':   return toolDocs(store, config, args);
-          case 'status': return await toolStatus(store, config, args, refresher);
           case 'similar': return await toolSimilar(store, config, args);
           default:
             return errorResult(`Unknown tool '${name}'.`);
@@ -100,12 +95,6 @@ class Refresher {
     return this.inFlight;
   }
 
-  /** Force a refresh regardless of throttle. Used by `status`. */
-  async now() {
-    this.lastCheck = 0;
-    return (await this.maybe()) ?? null;
-  }
-
   async _run() {
     try {
       const { Indexer } = await import('../core/indexer.js');
@@ -132,24 +121,33 @@ class Refresher {
 
 // ---------------------------------------------------------------- tools
 
-function budgetOf(config, args) {
-  return args.budget ?? config.defaultBudget;
+// Unlike the CLI (where config.defaultBudget keeps terminal output sane by
+// default), MCP responses are uncapped unless the caller passes `budget`
+// explicitly. A model that gets a silently shortened answer treats it as
+// complete and stops looking — that costs far more than the tokens a default
+// cap would have saved.
+function budgetOf(args) {
+  return args.budget ?? null;
 }
 
 function toolMap(store, config, args, ledger) {
+  // One tool, two modes: a symbol routes to relationships, a path (or nothing)
+  // routes to a structural outline.
+  if (args.symbol) return toolGraph(store, config, args, ledger);
+
   const target = normalizePath(args.path ?? '');
   const file = target ? store.getFileByPath(target) : null;
 
   const result = file
-    ? outlineFile(store, file, { budget: budgetOf(config, args), kinds: args.kinds ?? null, maxDepth: args.depth ?? 99 })
-    : outlineDir(store, target, { depth: args.depth ?? 1, budget: budgetOf(config, args) });
+    ? outlineFile(store, file, { budget: budgetOf(args), kinds: args.kinds ?? null, maxDepth: args.depth ?? 99 })
+    : outlineDir(store, target, { depth: args.depth ?? 1, budget: budgetOf(args) });
 
   // A path that is neither a file nor a directory prefix is usually a wrong
   // guess at the layout. Saying so, and offering the parent, is cheaper than
   // letting the agent probe three more times.
   if (!file && result.lines[0]?.startsWith('no indexed files')) {
     const parent = target.includes('/') ? target.slice(0, target.lastIndexOf('/')) : '';
-    const alt = outlineDir(store, parent, { depth: 1, budget: budgetOf(config, args) });
+    const alt = outlineDir(store, parent, { depth: 1, budget: budgetOf(args) });
     return textResult(
       `No file or directory '${target}'.\n\nNearest indexed level (${parent || '.'}):\n` +
         alt.lines.join('\n')
@@ -172,11 +170,11 @@ function toolFind(store, config, args, ledger) {
     return textResult(
       `No symbols matching '${args.query}'.\n` +
         'The symbol may be defined dynamically, live in a language with no extraction ' +
-        'queries yet, or the index may be stale — call status to check.'
+        'queries yet, or the index may be stale — run `cgraph update` to check.'
     );
   }
 
-  const fitted = fitToBudget(renderHits(hits), budgetOf(config, args));
+  const fitted = fitToBudget(renderHits(hits), budgetOf(args));
   // No source figure: a search spans many files, and there is no honest way
   // to say how much of them another workflow would have read.
   ledger.record('find', fitted.tokens);
@@ -184,46 +182,6 @@ function toolFind(store, config, args, ledger) {
   let text = fitted.lines.join('\n');
   if (fitted.dropped) text += `\n... ${fitted.dropped} more lines (raise budget)`;
   return textResult(text + staleness(store));
-}
-
-function toolRead(store, config, args, ledger) {
-  const target = String(args.target);
-  const budget = budgetOf(config, args);
-  const range = parseLocation(target);
-
-  if (range) {
-    const file = store.getFileByPath(range.path);
-    if (!file) return errorResult(`No indexed file '${range.path}'.`);
-    const pseudo = {
-      file_id: file.id, kind: 'lines', name: `${range.start}-${range.end}`,
-      start_line: range.start, end_line: range.end,
-      start_byte: 0, end_byte: Number.MAX_SAFE_INTEGER, doc: null, signature: null,
-    };
-    const result = readSymbol(store, store.getMeta('root'), pseudo, { mode: 'body', budget });
-    ledger.record('read', result.tokens, result.baseline);
-    return textResult(result.lines.join('\n'));
-  }
-
-  const matches = findSymbol(store, target, { limit: 10 });
-  if (!matches.length) {
-    return errorResult(`No symbol named '${target}'. Use find to search for it.`);
-  }
-
-  const result = readSymbol(store, store.getMeta('root'), matches[0], {
-    mode: args.mode ?? 'body', budget,
-  });
-
-  // Ambiguity is information the agent needs. Listing alternatives costs ~15
-  // tokens each and prevents acting on the wrong `handler`.
-  if (matches.length > 1) {
-    result.lines.push('', `${matches.length - 1} other symbols share this name:`);
-    for (const m of matches.slice(1, 6)) {
-      result.lines.push(`  ${m.qname}  ${m.path}:${m.start_line}`);
-    }
-  }
-
-  ledger.record('read', result.tokens, result.baseline);
-  return textResult(result.lines.join('\n') + staleness(store));
 }
 
 function toolGraph(store, config, args, ledger) {
@@ -302,66 +260,11 @@ function toolGraph(store, config, args, ledger) {
     return errorResult(`Unknown direction '${direction}'. Use callers, callees, importers, impact, path, or explore.`);
   }
 
-  const fitted = fitToBudget(lines, budgetOf(config, args));
+  const fitted = fitToBudget(lines, budgetOf(args));
   ledger.record('graph', fitted.tokens, 0);
   let text = fitted.lines.join('\n');
   if (fitted.dropped) text += `\n... ${fitted.dropped} more (raise budget)`;
   return textResult(text + staleness(store));
-}
-
-function toolDocs(store, config, args) {
-  if (!args.package) {
-    const deps = listDependencies(store, { limit: args.top ?? 25 });
-    if (!deps.length) {
-      return textResult('No dependency usage recorded. Run `cgraph index` to populate it.');
-    }
-    const lines = ['dependencies by usage in this repo:', ''];
-    for (const d of deps) lines.push(`  ${String(d.uses).padStart(5)}  ${d.package}  (${d.ecosystem})`);
-    return textResult(lines.join('\n'));
-  }
-
-  const result = lookupDocs(store, config, {
-    pkg: args.package, symbol: args.symbol ?? null, top: args.top ?? 15,
-  });
-  return textResult(result.lines.join('\n'));
-}
-
-async function toolStatus(store, config, args, refresher) {
-  const refresh = args.refresh !== false;
-  const lines = [];
-
-  if (refresh) {
-    // Bypasses the throttle: asking for status is an explicit request for the
-    // current truth. Reuses the shared registry rather than reloading every
-    // grammar, which the previous per-call load did.
-    const stats = await refresher.now();
-
-    if (!stats) {
-      lines.push('auto-refresh is disabled; showing the index as last built');
-    } else if (stats.added || stats.changed || stats.removed) {
-      lines.push(`refreshed: ${stats.added} added, ${stats.changed} changed, ${stats.removed} removed`);
-    } else {
-      lines.push('index is up to date');
-    }
-  }
-
-  const s = store.stats();
-  const total = s.exact + s.inferred;
-  lines.push(
-    '',
-    `files    ${s.files} (${s.parsed} with symbols)`,
-    `symbols  ${s.nodes}`,
-    `edges    ${s.edges}  (${total ? Math.round((s.exact / total) * 100) : 0}% proven, ${s.inferred} inferred)`,
-    `deps     ${s.externals}`,
-  );
-
-  // A measured cost, not a claimed saving: stating what a different workflow
-  // would have spent would be a guess dressed as a number.
-  const counters = store.counters('total.');
-  const returned = Number(counters['total.tokens_returned'] ?? 0);
-  if (returned > 0) lines.push('', `queries so far returned ${returned.toLocaleString()} tokens`);
-
-  return textResult(lines.join('\n'));
 }
 
 async function toolSimilar(store, config, args) {
@@ -397,16 +300,10 @@ function staleness(store) {
   if (!last) return '';
   const ageMin = (Date.now() - last) / 60000;
   if (ageMin < 10) return '';
-  return `\n\n(index last updated ${Math.round(ageMin)} min ago — call status to refresh)`;
+  return `\n\n(index last updated ${Math.round(ageMin)} min ago — run \`cgraph update\` to refresh)`;
 }
 
 function normalizePath(p) {
   return String(p).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-}
-
-function parseLocation(q) {
-  const m = q.match(/^(.+?):(\d+)(?:-(\d+))?$/);
-  if (!m) return null;
-  return { path: normalizePath(m[1]), start: Number(m[2]), end: m[3] ? Number(m[3]) : Number(m[2]) };
 }
 

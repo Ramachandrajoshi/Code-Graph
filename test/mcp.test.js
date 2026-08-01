@@ -82,7 +82,7 @@ test('tool schemas stay within their token budget', () => {
 
 test('exposes exactly the intended tool set', () => {
   const names = toolDefinitions({}).map((t) => t.name);
-  assert.deepEqual(names, ['map', 'find', 'read', 'graph', 'docs', 'status']);
+  assert.deepEqual(names, ['map', 'find']);
 });
 
 test('similar is registered only when embeddings are enabled', () => {
@@ -173,7 +173,7 @@ test('tools/list matches the definitions', opts, async () => {
   try {
     const { responses } = await session(fx.root, [INIT, { jsonrpc: '2.0', id: 2, method: 'tools/list' }]);
     const names = responses.find((r) => r.id === 2).result.tools.map((t) => t.name);
-    assert.deepEqual(names, ['map', 'find', 'read', 'graph', 'docs', 'status']);
+    assert.deepEqual(names, ['map', 'find']);
   } finally { fx.cleanup(); }
 });
 
@@ -190,25 +190,25 @@ test('find returns ranked symbol hits', opts, async () => {
   } finally { fx.cleanup(); }
 });
 
-test('graph reports callers', opts, async () => {
+test('map in relate mode reports callers', opts, async () => {
   const fx = await buildFixture(REPO);
   try {
     const { responses } = await session(fx.root, [
       INIT,
       { jsonrpc: '2.0', id: 2, method: 'tools/call',
-        params: { name: 'graph', arguments: { symbol: 'findUser', direction: 'callers' } } },
+        params: { name: 'map', arguments: { symbol: 'findUser', direction: 'callers' } } },
     ]);
     assert.match(responses.find((r) => r.id === 2).result.content[0].text, /handleLogin/);
   } finally { fx.cleanup(); }
 });
 
-test('graph explore combines callers and callees with line ranges', opts, async () => {
+test('map explore combines callers and callees with line ranges', opts, async () => {
   const fx = await buildFixture(REPO);
   try {
     const { responses } = await session(fx.root, [
       INIT,
       { jsonrpc: '2.0', id: 2, method: 'tools/call',
-        params: { name: 'graph', arguments: { symbol: 'handleLogin', direction: 'explore' } } },
+        params: { name: 'map', arguments: { symbol: 'handleLogin', direction: 'explore' } } },
     ]);
     const text = responses.find((r) => r.id === 2).result.content[0].text;
     assert.match(text, /called from \(bottom-up/);
@@ -217,16 +217,18 @@ test('graph explore combines callers and callees with line ranges', opts, async 
   } finally { fx.cleanup(); }
 });
 
-test('read returns one symbol body', opts, async () => {
+test('read, status, and docs are no longer exposed as MCP tools', opts, async () => {
   const fx = await buildFixture(REPO);
   try {
     const { responses } = await session(fx.root, [
       INIT,
       { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'read', arguments: { target: 'findUser' } } },
+      { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'status', arguments: {} } },
+      { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'docs', arguments: {} } },
     ]);
-    const text = responses.find((r) => r.id === 2).result.content[0].text;
-    assert.match(text, /export function findUser/);
-    assert.ok(!text.includes('handleLogin'), 'should not leak the other file');
+    assert.match(responses.find((r) => r.id === 2).result.content[0].text, /Unknown tool/);
+    assert.match(responses.find((r) => r.id === 3).result.content[0].text, /Unknown tool/);
+    assert.match(responses.find((r) => r.id === 4).result.content[0].text, /Unknown tool/);
   } finally { fx.cleanup(); }
 });
 
@@ -238,7 +240,7 @@ test('a failing tool returns a readable result, not a protocol error', opts, asy
     const { responses } = await session(fx.root, [
       INIT,
       { jsonrpc: '2.0', id: 2, method: 'tools/call',
-        params: { name: 'read', arguments: { target: 'doesNotExistAnywhere' } } },
+        params: { name: 'map', arguments: { symbol: 'doesNotExistAnywhere' } } },
     ]);
     const res = responses.find((r) => r.id === 2);
     assert.ok(res.result, 'should be a result, not an error');
@@ -285,16 +287,28 @@ test('map on a bad path suggests the nearest indexed level', opts, async () => {
   } finally { fx.cleanup(); }
 });
 
-test('status reports index statistics', opts, async () => {
-  const fx = await buildFixture(REPO);
+test('map is not truncated by default but honors an explicit budget', opts, async () => {
+  // 300 symbols comfortably exceeds the 2000-token default that used to be
+  // applied automatically; the outline must come back whole unless the caller
+  // asks for a cap.
+  const many = Array.from({ length: 300 }, (_, i) => `export function fn${i}() { return ${i}; }`).join('\n');
+  const fx = await buildFixture({ 'package.json': '{"name":"t"}', 'src/many.js': many + '\n' });
   try {
     const { responses } = await session(fx.root, [
       INIT,
-      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'status', arguments: { refresh: false } } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'map', arguments: { path: 'src/many.js' } } },
     ]);
     const text = responses.find((r) => r.id === 2).result.content[0].text;
-    assert.match(text, /symbols/);
-    assert.match(text, /edges/);
+    assert.match(text, /fn0\(/);
+    assert.match(text, /fn299\(/, 'the whole outline comes back, not just the head');
+    assert.ok(!text.includes('raise --budget'), 'no truncation note when no budget was given');
+
+    const { responses: capped } = await session(fx.root, [
+      INIT,
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'map', arguments: { path: 'src/many.js', budget: 50 } } },
+    ]);
+    const cappedText = capped.find((r) => r.id === 2).result.content[0].text;
+    assert.match(cappedText, /raise --budget/, 'an explicit budget still truncates, loudly');
   } finally { fx.cleanup(); }
 });
 

@@ -2,8 +2,8 @@
  * CLI router.
  *
  * Commands are lazily imported so that `cgraph map` doesn't pay to load the
- * indexer, the MCP server, or the dependency-doc subsystem. On a tool an agent
- * may invoke dozens of times per session, startup latency is a real cost.
+ * indexer or the MCP server. On a tool an agent may invoke dozens of times
+ * per session, startup latency is a real cost.
  */
 
 import { parseArgs } from './args.js';
@@ -17,7 +17,6 @@ const COMMANDS = {
   find: () => import('./commands/find.js'),
   read: () => import('./commands/read.js'),
   graph: () => import('./commands/graph.js'),
-  docs: () => import('./commands/docs.js'),
   stats: () => import('./commands/stats.js'),
   packs: () => import('./commands/packs.js'),
   doctor: () => import('./commands/doctor.js'),
@@ -45,7 +44,6 @@ ${color.bold('RETRIEVAL')}
   find <query>         Ranked symbol + text search   (replaces grep)
   read <symbol|loc>    Exact code slice              (replaces whole-file read)
   graph <symbol>       Callers, callees, impact      (no shell equivalent)
-  docs <package>       Dependency API this repo uses
 
 ${color.bold('DIAGNOSTICS')}
   stats                Index size and token savings to date
@@ -67,8 +65,8 @@ export async function main(argv) {
   const args = parseArgs(argv, {
     // `agent` must consume a value, or `--agent claude` parses 'claude' as a
     // positional and the flag silently becomes `true`.
-    strings: ['root', 'path', 'lang', 'kind', 'mode', 'dir', 'symbol', 'package', 'q', 'agent', 'grammar', 'to'],
-    numbers: ['budget', 'depth', 'limit', 'top', 'workers'],
+    strings: ['root', 'path', 'lang', 'kind', 'mode', 'dir', 'symbol', 'q', 'agent', 'grammar', 'to'],
+    numbers: ['budget', 'depth', 'limit', 'workers'],
     alias: { h: 'help', v: 'version', q: 'query' },
   });
 

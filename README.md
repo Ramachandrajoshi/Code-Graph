@@ -72,7 +72,6 @@ cgraph map [path]        Outline a repo, directory, or file   (replaces ls, glob
 cgraph find <query>      Ranked symbol search                 (replaces grep)
 cgraph read <symbol>     Exactly one symbol or line range     (replaces read)
 cgraph graph <symbol>    Callers, callees, impact, paths      (no shell equivalent)
-cgraph docs [package]    Dependency API, ranked by your usage
 
 cgraph index [--force]   Build or rebuild the index
 cgraph update            Re-index only what changed
@@ -219,58 +218,6 @@ nothing.
 None of these are required. They move *when* the cost is paid, not whether the
 answer is right.
 
-## Where dependency docs come from
-
-Local first — the copy on disk matches the version you actually resolved:
-
-| Ecosystem | Read from |
-|---|---|
-| npm | `node_modules/<pkg>` → `.d.ts` via the `types`/`exports` entry |
-| NuGet | `~/.nuget/packages` → the XML doc beside the DLL |
-| PyPI | `site-packages` → `.pyi` stubs, else `.py` signatures |
-
-When it isn't installed — a fresh checkout, another machine's cache — cgraph
-fetches **the package's own published artifact** and extracts it with the same
-parsers:
-
-| Ecosystem | Fetched | Contains |
-|---|---|---|
-| npm | `.tgz`, falling back to `@types/<pkg>` | `.d.ts` |
-| NuGet | `.nupkg` | XML documentation |
-| Maven | `-sources.jar` | `.java` sources |
-| PyPI | wheel or sdist | `.pyi` / `.py` |
-
-No scraping, no API key, no third-party service. The result is version-exact
-because it *is* the published artifact, and identical to what local extraction
-would have produced.
-
-```bash
-cgraph docs --refresh            # local first, registry when absent
-cgraph docs --refresh --guides   # also fetch llms.txt where published
-cgraph docs --refresh --offline  # never touch the network
-```
-
-### API reference vs. prose
-
-Package archives carry **API reference** — signatures and doc comments, because
-that is what is in the source. They cannot carry setup guides or concepts, which
-were never in the source.
-
-`--guides` fetches [`llms.txt`](https://llmstxt.org) where a project publishes
-one, which is the only prose source here. Coverage is real but partial.
-
-For broad prose documentation across many libraries, a docs-focused MCP server
-such as [Context7](https://github.com/upstash/context7) complements cgraph
-rather than competing with it — install both. They answer different questions:
-
-| Question | Answered by |
-|---|---|
-| What does *my project* use from this library, and where? | cgraph |
-| How does this library work in general? | a docs MCP |
-
-cgraph's `docs` is ranked by **your** usage, which no general documentation
-source can do.
-
 ## Honest by construction
 
 Every edge carries a confidence, and it is visible in the output:
@@ -354,18 +301,25 @@ vocabulary, so they can usually be vendored with minimal edits.
 
 ## MCP tools
 
-Six tools, not thirty. Every tool schema sits in the agent's context on **every
-turn**, so the tool list is itself a permanent token cost — a 30-tool server
-spends 3-4k tokens forever to save tokens on retrieval. This set costs ~1.3k.
+Two tools, not thirty. Every tool schema sits in the agent's context on
+**every turn**, so the tool list is itself a permanent token cost — a 30-tool
+server spends 3-4k tokens forever to save tokens on retrieval.
 
 | Tool | Replaces |
 |---|---|
-| `map` | `ls`, `glob`, exploratory reads |
+| `map` | `ls`, `glob`, exploratory reads, **and** callers/callees/impact/path (nothing, previously) — pass `path` for an outline or `symbol` for relationships, never both |
 | `find` | `grep` |
-| `read` | whole-file reads |
-| `graph` | nothing — new capability |
-| `docs` | reading `node_modules`, web search |
-| `status` | — |
+
+`read` and `status` are deliberately not MCP tools: every harness already has
+an exact, line-based file reader, and freshness is handled automatically (a
+throttled re-index runs before every call) rather than through a manual check.
+Both remain available from the shell — `cgraph read`, `cgraph stats`. Dependency
+API documentation is likewise out of scope — pair cgraph with a docs-focused MCP
+server such as [Context7](https://github.com/upstash/context7) for that.
+
+Responses are not truncated by default. Every tool accepts an optional
+`budget` to cap output when you deliberately want a shorter answer, but no
+default is applied on your behalf.
 
 `similar` (semantic search) is registered only when embeddings are configured,
 so its schema costs nothing otherwise.
@@ -443,10 +397,6 @@ Invalidation is content-hash based, so `touch` correctly changes nothing.
   why `tree-sitter-wasms` is an *optional peer* dependency rather than a normal
   one — npm installs `optionalDependencies` by default, which would have made
   every install 56 MB.
-- **Dependency docs are local-first.** Read from `node_modules`/`site-packages`
-  where the types match your installed version exactly; the registry is a
-  fallback. The cache is keyed on content, so `npm link` and `patch-package`
-  don't serve stale docs.
 - **Full-text search is optional.** SQLite's FTS5 is a compile-time option and
   Node's bundled build often omits it (22.14 and 23.11 both do), so it is
   detected at runtime rather than required. Without it, name, signature and doc
@@ -470,7 +420,6 @@ project.read('handleLogin');            // one symbol's source
 project.callers('findUser');            // who calls it
 project.impact('findUser', { depth: 3 });   // what breaks if it changes
 project.path('postLogin', 'findUser');  // shortest call route
-project.dependencies();                 // deps ranked by usage
 
 project.close();
 ```

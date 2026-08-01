@@ -82,7 +82,7 @@ test('--help lists the commands', () => {
   const output = execFileSync(process.execPath, [BIN, '--help'], {
     encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' },
   });
-  for (const cmd of ['init', 'index', 'map', 'find', 'read', 'graph', 'docs', 'serve']) {
+  for (const cmd of ['init', 'index', 'map', 'find', 'read', 'graph', 'serve']) {
     assert.match(output, new RegExp(`\\b${cmd}\\b`), `help should mention '${cmd}'`);
   }
 });
@@ -334,13 +334,5 @@ test('commands fail clearly when no index exists', opts, () => {
     fs.writeFileSync(path.join(root, 'package.json'), '{"name":"x"}');
     const output = runExpectingFailure(root, ['find', 'anything']);
     assert.match(output, /cgraph init/, 'tell the user how to fix it');
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('docs lists dependencies by usage', opts, () => {
-  const root = setup();
-  try {
-    const output = run(root, ['docs']);
-    assert.match(output, /dependencies by usage/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

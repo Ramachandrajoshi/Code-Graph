@@ -114,8 +114,8 @@ CREATE INDEX idx_imports_resolved ON imports(resolved_file_id);
 CREATE INDEX idx_imports_alias    ON imports(file_id, alias);
 
 --------------------------------------------------------------------------------
--- Externals: dependency API surface. use_count is what makes the docs tool return the
--- functions this project actually calls rather than a whole library manual.
+-- Externals: dependency API surface. use_count ranks packages/symbols by how
+-- much this project actually calls them (see map/graph external edges).
 --------------------------------------------------------------------------------
 CREATE TABLE externals (
   id        INTEGER PRIMARY KEY,

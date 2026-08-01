@@ -107,25 +107,6 @@ const QUESTIONS = [
       };
     },
   },
-  {
-    id: 'dependency-api',
-    ask: (ctx) => {
-      const dep = ctx.store.get(
-        `SELECT package FROM externals WHERE ecosystem NOT IN ('builtin')
-          GROUP BY package ORDER BY SUM(use_count) DESC LIMIT 1`
-      );
-      if (!dep) return null;
-      const rows = ctx.store.all(
-        `SELECT symbol, signature, use_count FROM externals
-          WHERE package = ? AND symbol != '' ORDER BY use_count DESC LIMIT 15`,
-        dep.package
-      );
-      return {
-        result: { tokens: tokensOf(rows.map((r) => `${r.symbol} ${r.signature ?? ''} ${r.use_count}x`)) || 12 },
-        context: `${dep.package}, ${rows.length} symbols`,
-      };
-    },
-  },
 ];
 
 function tokensOf(lines) {

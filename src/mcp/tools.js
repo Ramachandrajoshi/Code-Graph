@@ -1,19 +1,31 @@
 /**
  * MCP tool definitions.
  *
- * SIX tools, not thirty (seven with embeddings enabled), and every word here
+ * TWO tools, not thirty (three with embeddings enabled), and every word here
  * is rationed. Tool schemas sit in the agent's context on EVERY turn, so this
  * file is a permanent token tax on every conversation — a 30-tool server
  * spends 3-4k tokens forever in order to save tokens on retrieval, which
  * largely defeats the purpose.
  *
- * Measured cost: under the 1400-token budget enforced by test/mcp.test.js. The
- * original target was 900, which turned out not to be reachable while keeping
- * real enums and filters — roughly half the remaining cost is JSON Schema
- * structure rather than prose, and trimming further would mean removing
- * genuinely useful parameters. Recorded here rather than quietly missed.
+ * Tools this server used to expose are gone on purpose:
+ *   - `read`: every harness already has an exact, line-based file reader.
+ *     Duplicating it here just gives the model two ways to do the same thing.
+ *   - `status`: freshness is handled automatically (every call refreshes a
+ *     throttled index scan first), so a manual "check status" tool had no
+ *     decision behind it worth spending schema tokens on. `cgraph stats` still
+ *     answers this from the shell.
+ *   - `docs`: dependency API lookup is better served by a dedicated docs MCP
+ *     (e.g. Context7) than by re-implementing registry/node_modules parsing
+ *     here.
+ * `map` and `graph` are merged into one tool below: both answer "where do I
+ * look next", one by structure and one by relationship, and a model choosing
+ * between two similarly-described tools is exactly the ambiguity a single
+ * tool with two clearly-named modes avoids.
  *
- * For comparison, the 30-tool servers this replaces cost 3-4k tokens per turn.
+ * Responses are not truncated by default — see `budget` on `map`/`find`: it is
+ * an opt-in cap, not a silent one. An agent that gets a partial answer without
+ * asking for one stops looking too early, which costs far more than the
+ * tokens the cap would have saved.
  *
  * Descriptions are written for the model, not for a human reading docs. The
  * highest-value words are the ones naming what each tool REPLACES, because the
@@ -21,21 +33,42 @@
  */
 
 export function toolDefinitions({ embeddingsEnabled = false } = {}) {
-  const budget = { type: 'integer', description: 'Max response tokens.' };
+  const budget = { type: 'integer', description: 'Optional cap on response tokens. Uncapped by default.' };
 
   const tools = [
     {
       name: 'map',
       description:
-        'Outline a repo, directory, or file: symbol hierarchy with line numbers. ' +
-        'Use instead of ls/glob, and instead of reading a file to see what is in it. ' +
-        'Returns a fraction of the file.',
+        'Two modes — pass `path` for one, `symbol` for the other; never both.\n' +
+        '\n' +
+        'OUTLINE (`path`): symbol hierarchy of a repo, directory, or file, with line ' +
+        'numbers. Use instead of ls/glob, and instead of opening a file to see what is ' +
+        'in it — an outline is a fraction of the file\'s size and tells you which symbol ' +
+        'is worth reading in full.\n' +
+        '\n' +
+        'RELATE (`symbol`): callers, callees, importers, blast-radius impact, or the call ' +
+        'path to another symbol. run it before ' +
+        'changing anything shared. Edges marked "!" are guessed from a name match, not ' +
+        'proven through an import; verify before relying on them.',
       inputSchema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Repo-relative. Omit for whole repo.' },
-          depth: { type: 'integer', description: 'Directory levels (default 1).' },
-          kinds: { type: 'array', items: { type: 'string' }, description: 'e.g. ["class","function"].' },
+          path: { type: 'string', description: 'Outline mode. Repo-relative; omit for the whole repo.' },
+          kinds: { type: 'array', items: { type: 'string' }, description: 'Outline: filter, e.g. ["class","function"].' },
+          symbol: { type: 'string', description: 'Relate mode. Symbol to trace relationships for.' },
+          direction: {
+            type: 'string',
+            enum: ['callers', 'callees', 'importers', 'impact', 'path', 'explore'],
+            description:
+              'Relate mode, default "callers". callees = what it calls. importers = files ' +
+              'importing its file. impact = everything transitively affected by changing it. ' +
+              'path = call path to `to`. explore = callers and callees together in one call, ' +
+              'each with exact start-end line ranges.',
+          },
+          to: { type: 'string', description: 'Relate: destination symbol, required for direction=path.' },
+          depth: { type: 'integer', description: 'Outline: directory levels (default 1). Relate: traversal depth for impact/path.' },
+          exact: { type: 'boolean', description: 'Relate: proven edges only, hide name-match guesses.' },
+          limit: { type: 'integer', description: 'Relate: max results.' },
           budget,
         },
       },
@@ -64,71 +97,6 @@ export function toolDefinitions({ embeddingsEnabled = false } = {}) {
       },
     },
 
-    {
-      name: 'read',
-      description:
-        'Read one symbol or line range exactly. Use instead of reading a whole file.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: 'Name, Class#method, or path:start-end.' },
-          mode: { type: 'string', enum: ['body', 'signature'] },
-          budget,
-        },
-        required: ['target'],
-      },
-    },
-
-    {
-      name: 'graph',
-      description:
-        'Relationships between symbols. No grep equivalent exists — use before ' +
-        'changing shared code. Edges marked "!" are guessed from a name match, not ' +
-        'proven through an import.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          symbol: { type: 'string' },
-          direction: {
-            type: 'string',
-            enum: ['callers', 'callees', 'importers', 'impact', 'path', 'explore'],
-            description:
-              'impact = everything transitively affected by changing it. ' +
-              'explore = callers and callees together, each with exact start-end line ranges.',
-          },
-          to: { type: 'string', description: 'Destination, for direction=path.' },
-          depth: { type: 'integer' },
-          exact: { type: 'boolean', description: 'Proven edges only.' },
-          budget,
-        },
-        required: ['symbol'],
-      },
-    },
-
-    {
-      name: 'docs',
-      description:
-        'A dependency API, ranked by what THIS project calls, with usage sites. ' +
-        'Use instead of reading node_modules or searching the web.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          package: { type: 'string', description: 'Omit to list deps by usage.' },
-          symbol: { type: 'string' },
-          top: { type: 'integer' },
-        },
-      },
-    },
-
-    {
-      name: 'status',
-      description:
-        'Index freshness and stats. Call when results look stale. Re-indexes changed files.',
-      inputSchema: {
-        type: 'object',
-        properties: { refresh: { type: 'boolean' } },
-      },
-    },
   ];
 
   // Registered only when configured, so its schema costs nothing otherwise.

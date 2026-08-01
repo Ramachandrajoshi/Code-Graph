@@ -129,8 +129,7 @@ src/
     store       SQLite via node:sqlite
     retrieve    token-budgeted rendering
   packs/      language packs (all language-specific knowledge lives here)
-  mcp/        MCP server (6 tools, stdio JSON-RPC)
-  deps/       dependency documentation
+  mcp/        MCP server (2 tools, stdio JSON-RPC)
   sdk/        public API for pack authors
 ```
 

@@ -43,7 +43,6 @@ test('the package entry point exports its documented surface', async () => {
   for (const name of [
     'openProject', 'loadConfig', 'Store', 'Indexer', 'PackRegistry',
     'outlineFile', 'findSymbol', 'readSymbol', 'graph', 'estimate',
-    'listDependencies', 'lookupDocs',
   ]) {
     assert.ok(api[name], `'${name}' should be exported from the package root`);
   }

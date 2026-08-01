@@ -15,7 +15,6 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import { buildFixture } from './fixture.js';
 import { detectTechnologies, languagesToLoad } from '../src/packs/technologies.js';
-import { parseXmlDoc } from '../src/deps/dotnet-xmldoc.js';
 
 const require = createRequire(import.meta.url);
 const skip = (() => {
@@ -338,63 +337,4 @@ test('an unexpected language still gets its pack loaded on sight', opts, async (
     const py = fx.store.get("SELECT name FROM nodes WHERE name = 'build_it'");
     assert.ok(py, 'the unexpected language must still be extracted');
   } finally { fx.cleanup(); }
-});
-
-// ---------------------------------------------------------------- XML docs
-
-test('parses .NET XML documentation into symbols', () => {
-  const xml = `<?xml version="1.0"?>
-<doc>
-  <assembly><name>My.Lib</name></assembly>
-  <members>
-    <member name="T:My.Lib.Widget">
-      <summary>A widget.</summary>
-    </member>
-    <member name="M:My.Lib.Widget.Resize(System.Int32,System.String)">
-      <summary>Resizes the <see cref="T:My.Lib.Widget"/>.</summary>
-    </member>
-    <member name="P:My.Lib.Widget.Name">
-      <summary>Gets the name.</summary>
-    </member>
-    <member name="M:My.Lib.Widget.#ctor(System.String)">
-      <summary>Creates one.</summary>
-    </member>
-  </members>
-</doc>`;
-
-  const { assembly, symbols } = parseXmlDoc(xml);
-  assert.equal(assembly, 'My.Lib');
-
-  const by = Object.fromEntries(symbols.map((s) => [s.symbol, s]));
-  assert.equal(by.Widget.kind, 'class');
-  assert.equal(by.Widget.doc, 'A widget.');
-
-  assert.equal(by['Widget.Resize'].kind, 'method');
-  assert.equal(by['Widget.Resize'].signature, 'Widget.Resize(int, string)',
-    'BCL type names are aliased to their C# keywords');
-  assert.equal(by['Widget.Resize'].doc, 'Resizes the Widget.', 'cref renders as a name');
-
-  assert.equal(by['Widget.Name'].kind, 'field', 'a property is what a caller binds to');
-});
-
-test('XML doc parsing strips generic arity markers', () => {
-  const xml = `<doc><members>
-    <member name="M:N.Cache\`1.Get\`\`1(\`\`0)"><summary>Gets it.</summary></member>
-  </members></doc>`;
-  const { symbols } = parseXmlDoc(xml);
-  assert.ok(symbols.length > 0);
-  assert.ok(!symbols[0].symbol.includes('`'), `arity markers must go: ${symbols[0].symbol}`);
-});
-
-test('XML doc parsing caps output', () => {
-  const members = Array.from({ length: 900 }, (_, i) =>
-    `<member name="M:N.T.M${i}"><summary>Doc ${i}.</summary></member>`).join('');
-  const { symbols } = parseXmlDoc(`<doc><members>${members}</members></doc>`, { limit: 50 });
-  assert.equal(symbols.length, 50, 'a framework package has thousands nobody reads');
-});
-
-test('XML doc parsing survives malformed input', () => {
-  for (const bad of ['', '<doc>', 'not xml at all', '<doc><members><member/></members></doc>']) {
-    assert.doesNotThrow(() => parseXmlDoc(bad));
-  }
 });

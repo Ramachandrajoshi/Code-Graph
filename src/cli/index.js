@@ -23,6 +23,7 @@ const COMMANDS = {
   serve: () => import('./commands/serve.js'),
   watch: () => import('./commands/watch.js'),
   hooks: () => import('./commands/hooks.js'),
+  skill: () => import('./commands/skill.js'),
 };
 
 const HELP = `
@@ -38,6 +39,7 @@ ${color.bold('SETUP')}
   update               Re-index only what changed
   watch                Keep the index fresh as files change
   hooks                Pre-warm the index on git checkout/merge/rebase
+  skill                Install cgraph as a discoverable Agent Skill
 
 ${color.bold('RETRIEVAL')}
   map [path]           Hierarchical outline          (replaces ls / glob)

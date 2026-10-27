@@ -79,6 +79,7 @@ cgraph watch             Keep the index fresh automatically
 cgraph doctor            Resolution quality and coverage gaps
 cgraph stats             Index size and what queries have cost
 cgraph packs             Inspect or scaffold language packs
+cgraph skill install     Add cgraph as a discoverable Agent Skill
 ```
 
 ### Example
@@ -154,7 +155,29 @@ preserved — the block lives between `<!-- cgraph:start -->` markers.
 ```bash
 cgraph init --no-instructions   # register MCP only
 cgraph init --no-mcp            # index only, touch no agent files
+cgraph init --no-skill          # skip the Agent Skill below
 ```
+
+### As an Agent Skill
+
+`init` also writes a `SKILL.md` into `.claude/skills/cgraph/`. A Skill is the
+lightest integration there is: the harness discovers it on its own, with **no
+MCP config, no restart, and no permission prompt** — and it teaches the agent to
+drive the `cgraph` CLI, so it works even when no MCP server is connected.
+
+Skills use progressive disclosure, the same token discipline as the MCP tool
+schemas: a one-line description sits in context every turn, and the full
+guidance loads only when a task matches it.
+
+```bash
+cgraph skill install             # add SKILL.md to this project
+cgraph skill install --global    # add it to your machine, not the repo
+cgraph skill status              # where the skill is installed
+cgraph skill uninstall           # remove it
+```
+
+This is additive to MCP, not a replacement: MCP tools are richer, the Skill is
+the path with nothing to connect.
 
 ### Manual setup
 

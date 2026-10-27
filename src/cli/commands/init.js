@@ -24,6 +24,7 @@ import {
   AGENTS, AGENT_IDS, selectAgents, registerMcp, writeInstructions, instructionFilesFor,
   writeClaudeSettings,
 } from '../../agents.js';
+import { installSkill } from '../../skills.js';
 import { out, color, Progress, toks, duration } from '../ui.js';
 
 export async function run(args) {
@@ -38,6 +39,7 @@ export async function run(args) {
   const selection = skipMcp ? { ids: [], explicit: true } : selectAgents(root, args.agent);
   const agentIds = selection.ids;
   const wantInstructions = args.instructions !== false;
+  const wantSkill = args.skill !== false;
 
   out('');
   out(`${color.bold('cgraph')} init  ${root}`);
@@ -120,6 +122,11 @@ export async function run(args) {
   // click "allow", so this closes that gap for Claude Code specifically.
   const settingsResult = connected.includes('claude') ? writeClaudeSettings(root) : null;
 
+  // The Skill is installed independently of MCP. It teaches the agent to drive
+  // the CLI, so it works even when no MCP server was registered — and unlike
+  // MCP it needs no restart and no permission pre-approval.
+  const skillResult = wantSkill ? installSkill(root) : null;
+
   // 4. Report ----------------------------------------------------------------
   out('');
   out(`  ${color.green('created')}   .cgraph/`);
@@ -157,6 +164,15 @@ export async function run(args) {
     }[settingsResult.status];
     const note = settingsResult.status === 'unparseable' ? ' (not valid JSON; left alone)' : '';
     out(`  ${tag}   ${settingsResult.file}${note ? color.dim(note) : ''}  ${color.dim('pre-approved so subagents don\'t need a human to allow it')}`);
+  }
+
+  if (skillResult) {
+    const tag = {
+      created: color.green('created'),
+      updated: color.green('updated'),
+      current: color.dim('current'),
+    }[skillResult.status];
+    out(`  ${tag}   ${skillResult.file}  ${color.dim('Agent Skill (discovered automatically)')}`);
   }
 
   out('');
@@ -212,6 +228,7 @@ ${color.bold('cgraph init')} — index this project and connect it to your agent
   cgraph init --agent all         Every agent below
   cgraph init --no-mcp            Index only; touch no agent files
   cgraph init --no-instructions   Register MCP but write no instruction files
+  cgraph init --no-skill          Skip the Agent Skill
 
 ${color.bold('AGENTS')}
   ${color.dim('id         mcp config             instructions')}
@@ -223,6 +240,7 @@ ${rows}
 
 ${color.bold('WHAT IT WRITES')}
   .cgraph/                 index + config      (added to .gitignore)
+  .claude/skills/cgraph/   SKILL.md, the no-config integration for Claude Code
   <mcp config>             one server entry named "cgraph"
   <instructions>           a block between <!-- cgraph:start --> markers
 
@@ -233,6 +251,7 @@ ${color.bold('OPTIONS')}
   --agent <list>       Comma-separated ids, or 'all' / 'none'
   --no-instructions    Skip instruction files
   --no-mcp             Skip all agent files
+  --no-skill           Skip the Agent Skill
   --root <dir>         Project directory (default: current)
   --quiet              No progress output
 `);

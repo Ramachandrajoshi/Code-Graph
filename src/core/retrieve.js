@@ -23,16 +23,32 @@ const KIND_MARK = {
 };
 
 /**
+ * The one marker for an edge's confidence: a leading space for proven (EXACT)
+ * edges, `!` for anything inferred.
+ *
+ * The `!` is load-bearing: a reader is told to verify every `!` edge before
+ * relying on it, because an inferred edge is only a name match, not a proven
+ * import. The CLI and the MCP server each used to hard-code this same ternary,
+ * so a confidence-tier change that touched one site would silently desync the
+ * two legends and quietly break that contract. Centralizing it here — a module
+ * both layers already import — keeps a single definition of the marker. Output
+ * is byte-for-byte what both call sites produced before.
+ */
+export function formatConfidence(confidence) {
+  return confidence === 'EXACT' ? ' ' : '!';
+}
+
+/**
  * Outline of a file: its symbol hierarchy, one line per symbol.
  *
  * This is the single highest-leverage output in the tool. A 142-line file costs
  * ~1,800 tokens to read and ~90 to outline, and the outline is usually enough to
  * decide which one symbol is worth reading in full.
  */
-export function outlineFile(store, file, { budget = 0, kinds = null, maxDepth = 99 } = {}) {
+export function outlineFile(store, file, { budget = 0, kinds = null, maxDepth = 99, detail = 'outline' } = {}) {
   const nodes = store.all(
-    `SELECT id, parent_id, kind, name, signature, start_line, end_line, tok, visibility, is_exported
-       FROM nodes WHERE file_id = ? ORDER BY start_byte ASC`,
+    `SELECT id, parent_id, kind, name, signature, doc, start_line, end_line, tok, visibility, is_exported
+       FROM nodes WHERE file_id = ? ORDER BY start_byte, id`,
     file.id
   );
 
@@ -50,7 +66,7 @@ export function outlineFile(store, file, { budget = 0, kinds = null, maxDepth = 
     if (depth > maxDepth) continue;
     if (kinds && !kinds.includes(n.kind)) continue;
 
-    lines.push(renderSymbol(n, depth));
+    lines.push(...renderSymbol(n, depth, detail));
   }
 
   if (!lines.length) {
@@ -76,7 +92,18 @@ export function outlineFile(store, file, { budget = 0, kinds = null, maxDepth = 
   };
 }
 
-function renderSymbol(n, depth) {
+/**
+ * Render one symbol as outline line(s).
+ *
+ * Returns an ARRAY so a `detail: 'full'` outline can append a doc-comment line
+ * under the symbol without changing the single-line `detail: 'outline'` output.
+ * In `outline` mode (the default, and the mode every existing caller is in) it
+ * returns exactly the one line it returned before — byte-for-byte. The extra
+ * doc line is opt-in so the default outline stays as cheap as it has always
+ * been; `full` trades tokens for context the agent can read without opening
+ * the file.
+ */
+function renderSymbol(n, depth, detail = 'outline') {
   const indent = '  '.repeat(depth);
   const line = String(n.start_line).padStart(4);
   const mark = KIND_MARK[n.kind] ?? '?';
@@ -86,7 +113,21 @@ function renderSymbol(n, depth) {
   const vis = n.visibility === 'private' ? '-' : n.visibility === 'protected' ? '#' : '';
   const body = n.signature || n.name;
 
-  return `${line} ${mark} ${indent}${vis}${body}`;
+  const out = [`${line} ${mark} ${indent}${vis}${body}`];
+
+  // `full` adds the doc comment where present. The signature is already the
+  // outline's `body`, so the incremental detail is the prose.
+  if (detail === 'full' && n.doc) {
+    const note = oneLine(n.doc);
+    if (note) out.push(`${' '.repeat(5 + indent.length)}${note}`);
+  }
+  return out;
+}
+
+/** Collapse a doc comment to one indented line, trimming comment markers. */
+function oneLine(doc) {
+  const text = String(doc).replace(/\s+/g, ' ').trim().replace(/^\/\*+|\*+\/$/g, '').trim();
+  return text ? `// ${text}` : '';
 }
 
 /**
@@ -124,14 +165,18 @@ export function outlineDir(store, prefix, { depth = 1, budget = 0 } = {}) {
   }
 
   const lines = [];
-  for (const [dir, g] of [...groups].sort((a, b) => b[1].tok - a[1].tok)) {
+  // Deterministic order (MCP spec: stable ordering improves prompt-cache hits):
+  // equal token-cost groups/files would otherwise shuffle between runs. The
+  // primary ranking (tok desc) is unchanged; ties fall back to name/path so the
+  // listing is byte-identical across calls.
+  for (const [dir, g] of [...groups].sort((a, b) => b[1].tok - a[1].tok || a[0].localeCompare(b[0]))) {
     const langs = [...g.langs].slice(0, 3).join(',');
     const subs = [...g.subprojects].slice(0, 3).join(', ');
     lines.push(
       `${dir}/  ${g.files} files  ~${compactTokens(g.tok)}${langs ? '  ' + langs : ''}${subs ? '  [' + subs + ']' : ''}`
     );
   }
-  for (const f of direct.sort((a, b) => b.tok - a.tok)) {
+  for (const f of direct.sort((a, b) => b.tok - a.tok || a.path.localeCompare(b.path))) {
     // The reason, not just the fact of skipping: an agent (or a human staring
     // at a run that "got stuck") should be able to tell an intentionally
     // skipped image from a parse failure without a separate `doctor` call.
@@ -169,23 +214,28 @@ export function outlineDir(store, prefix, { depth = 1, budget = 0 } = {}) {
  * `LoginService#login` and `login` both resolve without ambiguity games.
  */
 export function findSymbol(store, query, { limit = 10 } = {}) {
+  // `n.id` is the deterministic tiebreak on every branch (MCP spec: stable
+  // ordering improves prompt-cache hits). `map`(symbol) renders the first match,
+  // so a rank tie here must not pick a different symbol across runs. The primary
+  // ranking (rank, and tok on the name branch) is unchanged; only ties are made
+  // stable.
   const exactQ = store.all(
     `SELECT n.*, f.path FROM nodes n JOIN files f ON f.id = n.file_id
-      WHERE n.qname = ? ORDER BY n.rank DESC LIMIT ?`,
+      WHERE n.qname = ? ORDER BY n.rank DESC, n.id LIMIT ?`,
     query, limit
   );
   if (exactQ.length) return exactQ;
 
   const exactName = store.all(
     `SELECT n.*, f.path FROM nodes n JOIN files f ON f.id = n.file_id
-      WHERE n.name = ? ORDER BY n.rank DESC, n.tok DESC LIMIT ?`,
+      WHERE n.name = ? ORDER BY n.rank DESC, n.tok DESC, n.id LIMIT ?`,
     query, limit
   );
   if (exactName.length) return exactName;
 
   return store.all(
     `SELECT n.*, f.path FROM nodes n JOIN files f ON f.id = n.file_id
-      WHERE n.qname LIKE ? ORDER BY n.rank DESC LIMIT ?`,
+      WHERE n.qname LIKE ? ORDER BY n.rank DESC, n.id LIMIT ?`,
     `%${query}%`, limit
   );
 }

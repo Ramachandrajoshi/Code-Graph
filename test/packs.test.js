@@ -9,11 +9,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { buildFixture } from './fixture.js';
 import { definePack, validatePack, makeTestContext, CAPTURES } from '../src/sdk/index.js';
 import { LANGUAGES, detectLanguage, languageById } from '../src/packs/languages.js';
+import { detectTechnologies, languagesToLoad, detectSubprojectTechnologies } from '../src/packs/technologies.js';
 import { grammarInfo } from '../src/core/grammars.js';
 
 const require = createRequire(import.meta.url);
@@ -457,4 +459,270 @@ test('a broken third-party pack does not stop indexing', opts, async () => {
     assert.ok(registry.packs.get('javascript'), 'builtin packs still load');
     registry.dispose();
   } finally { fx.cleanup(); }
+});
+
+// ------------------------------------------------------- pack hook branches
+//
+// Each test below drives one hook branch through the REAL pipeline: a real
+// source file, parsed with the real grammar, resolved by the real resolver. The
+// assertion is what the hook produced in the graph, not what it returns when
+// called in isolation — a hook that works alone but is wired to the wrong
+// capture is exactly the defect a unit test cannot see.
+
+test('Rust resolves crate:: paths and classifies std:: as rust-std', opts, async () => {
+  // resolveImport: the `crate`/`self`/`super` branch (internal path) and the
+  // `std`/`core`/`alloc` builtin branch. Both are the head=== segments tests.
+  const fx = await buildFixture({
+    'Cargo.toml': '[package]\nname = "p"\n',
+    'src/db.rs': 'pub fn find_user(_id: &str) -> Option<String> { None }\n',
+    'src/main.rs': 'use crate::db::find_user;\nuse std::vec::Vec;\n\nfn main() { find_user("x"); }\n',
+  });
+  try {
+    // crate::db::find_user -> src/db.rs (matchModule strips the trailing symbol).
+    assert.equal(fx.importOf('src/main.rs', 'crate::db').resolved_path, 'src/db.rs');
+    assert.equal(fx.edge('main', 'find_user').confidence, 'EXACT');
+    // std::vec -> external rust-std, package "std".
+    const imp = fx.importOf('src/main.rs', 'std::vec');
+    assert.equal(imp.ecosystem, 'rust-std');
+    assert.equal(imp.ext_package, 'std');
+  } finally { fx.cleanup(); }
+});
+
+test('Java package-private visibility and annotation-stripped signature', opts, async () => {
+  // visibility(): the package-private default (no modifier -> internal).
+  // signature(): the `@\w+` strip that keeps @Override/@Transactional out of
+  // the signature.
+  const fx = await buildFixture({
+    'pom.xml': '<project></project>',
+    'src/main/java/A.java':
+      'class A {\n    void pkg() {}\n    @Override\n    public String findUser() { return null; }\n}\n',
+  });
+  try {
+    assert.equal(fx.node('pkg').visibility, 'internal', 'no modifier is package-private');
+    const sig = fx.node('findUser').signature;
+    assert.ok(sig.includes('findUser'), 'signature keeps the method');
+    assert.ok(!sig.includes('Override'), 'the @Override annotation is stripped');
+  } finally { fx.cleanup(); }
+});
+
+test('Python resolves `from . import x` and `from ..pkg import y`', opts, async () => {
+  // resolveImport relative branch: dots==1 with an empty rest (the `rest ? ...`
+  // false arm -> the package directory itself), and dots>1 (the pop-the-parents
+  // loop) for a two-dot import.
+  const fx = await buildFixture({
+    'pyproject.toml': '[project]\nname = "t"\n',
+    'app/__init__.py': 'def x():\n    pass\n',
+    'app/pkg.py': 'def y():\n    pass\n',
+    'app/sub/__init__.py': '',
+    'app/sub/main.py': 'from . import x\nfrom ..pkg import y\n\ndef run():\n    return x(), y()\n',
+  });
+  try {
+    assert.equal(fx.importOf('app/sub/main.py', '.').resolved_path, 'app/sub/__init__.py',
+      'a bare `.` resolves to the package __init__');
+    assert.equal(fx.importOf('app/sub/main.py', '..pkg').resolved_path, 'app/pkg.py',
+      'two dots walk up one directory level');
+  } finally { fx.cleanup(); }
+});
+
+test('Go classifies a predeclared builtin (len) on the call graph', opts, async () => {
+  // _asBuiltin for the Go pack: `len` is in builtins.globals, so the call
+  // becomes a builtin edge, not an unresolved reference.
+  const fx = await buildFixture({
+    'go.mod': 'module m\n',
+    'a.go': 'package a\n\nfunc f(s []string) int {\n\treturn len(s)\n}\n',
+  });
+  try {
+    const edges = fx.edgesFrom('f');
+    const builtin = edges.find((e) => e.ext_package === 'go' && e.ecosystem === 'builtin');
+    assert.ok(builtin, 'len(s) resolves to a builtin edge, not unresolved');
+
+    const rows = fx.store.all("SELECT name FROM unresolved WHERE name = 'len'");
+    assert.deepEqual(rows, [], 'a builtin is not a resolution failure');
+  } finally { fx.cleanup(); }
+});
+
+test('C# namespace nesting, default visibility, and attribute-stripped signature', opts, async () => {
+  // visibility(): namespace -> null; a type with no modifier -> internal; a
+  // member with no modifier -> private. signature(): the `[...]` strip that
+  // keeps [HttpGet]/[Authorize] out of the rendered signature.
+  const fx = await buildFixture({
+    'App.csproj': '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>',
+    'src/Models.cs':
+      'namespace App.Models\n{\n' +
+      '    public class Widget\n    {\n' +
+      '        [HttpGet]\n        [Authorize]\n        public string Render() { return Serialize(); }\n' +
+      '        int counter = 0;\n' +
+      '        string Serialize() { return ""; }\n' +
+      '    }\n}\n',
+  });
+  try {
+    assert.equal(fx.node('App.Models').kind, 'module', 'a namespace is a container node');
+    assert.equal(fx.node('App.Models').visibility, null, 'a namespace is visible everywhere');
+    assert.equal(fx.node('Widget').visibility, 'public');
+    assert.equal(fx.node('counter').visibility, 'private', 'C# members default to private');
+    assert.equal(fx.node('Serialize').visibility, 'private');
+    const sig = fx.node('Render').signature;
+    assert.ok(sig.includes('Render'));
+    assert.ok(!sig.includes('HttpGet'), '[HttpGet] is folded out of the signature');
+    assert.ok(!sig.includes('Authorize'));
+  } finally { fx.cleanup(); }
+});
+
+test('C# resolves a using to the file that declares the namespace, and System.* to dotnet', opts, async () => {
+  // resolveImport(): the findNamespace hit (a repo-declared namespace -> a file)
+  // and the System/Microsoft external branch (ecosystem dotnet, two-segment
+  // package).
+  const fx = await buildFixture({
+    'App.csproj': '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>',
+    'src/Models.cs': 'using System.Text;\nusing Newtonsoft.Json;\n\nnamespace App.Models\n{\n    public class Widget\n    {\n        public string Render() { return ""; }\n    }\n}\n',
+    'src/Consumer.cs': 'using App.Models;\n\npublic class Consumer\n{\n    public void Go() { var w = new Widget(); w.Render(); }\n}\n',
+  });
+  try {
+    assert.equal(fx.importOf('src/Consumer.cs', 'App.Models').resolved_path, 'src/Models.cs',
+      'using App.Models binds to the declaring file via findNamespace');
+    const sys = fx.importOf('src/Models.cs', 'System.Text');
+    assert.equal(sys.ecosystem, 'dotnet');
+    assert.equal(sys.ext_package, 'System.Text', 'System packages keep two segments');
+    const np = fx.importOf('src/Models.cs', 'Newtonsoft.Json');
+    assert.equal(np.ecosystem, 'nuget');
+    assert.equal(np.ext_package, 'Newtonsoft.Json');
+  } finally { fx.cleanup(); }
+});
+
+// ------------------------------------------------- registry: edge-case packs
+
+test('a pack whose query file is missing is reported as a gap, not a crash', opts, async () => {
+  // queriesFor(): the readFileSync try/catch (a declared query at a path that
+  // does not exist). The language is then skipped as "no-queries" and surfaced
+  // via gaps() / fingerprint(), not thrown.
+  const fx = await buildFixture({ 'package.json': '{"name":"t"}', 'src/a.js': 'export function keepMe() {}\n' });
+  try {
+    const packDir = path.join(fx.root, '.cgraph', 'packs', 'toml');
+    fs.mkdirSync(packDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packDir, 'package.json'),
+      JSON.stringify({ name: 'cgraph-pack-toml', version: '0.1.0', type: 'module', private: true })
+    );
+    fs.writeFileSync(
+      path.join(packDir, 'index.js'),
+      `import path from 'node:path';\nimport { fileURLToPath } from 'node:url';\nconst here = path.dirname(fileURLToPath(import.meta.url));\nexport default { id: 'toml', languages: ['toml'], queries: { tags: path.join(here, 'queries', 'nope.scm') } };\n`
+    );
+    fs.writeFileSync(path.join(fx.root, 'config.toml'), '[server]\nport = 1\n');
+
+    const { Indexer } = await import('../src/core/indexer.js');
+    const { PackRegistry } = await import('../src/packs/registry.js');
+    const { DEFAULTS } = await import('../src/core/config.js');
+    const config = { ...DEFAULTS, root: fx.root, dir: path.join(fx.root, '.cgraph'), deps: { ...DEFAULTS.deps, offline: true } };
+    const registry = await PackRegistry.load(config);
+    await new Indexer({ store: fx.store, config, registry }).run({ force: true });
+
+    // The declared query could not be read, so toml has no tags -> a gap, and
+    // fingerprint falls back to "missing" for it.
+    assert.ok(registry.gaps().includes('toml'), 'gaps() reports a query-less language');
+    assert.ok(registry.fingerprint(), 'fingerprint() tolerates the missing query file');
+
+    const rows = fx.store.all(
+      "SELECT n.name FROM nodes n JOIN files f ON f.id = n.file_id WHERE f.path = 'config.toml' AND n.kind != 'module'"
+    );
+    assert.deepEqual(rows, [], 'the file is indexed as a stub: no symbols extracted');
+
+    registry.dispose();
+  } finally { fx.cleanup(); }
+});
+
+test('a pack module with no default export object is skipped, not fatal', opts, async () => {
+  // importPack(): the `!pack || typeof pack !== 'object'` throw, caught by
+  // load()'s per-source try/catch. A module that exports nothing useful must
+  // not take indexing down.
+  const fx = await buildFixture({ 'package.json': '{"name":"t"}', 'src/a.js': 'export function keepMe() {}\n' });
+  try {
+    const packDir = path.join(fx.root, '.cgraph', 'packs', 'noexport');
+    fs.mkdirSync(packDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packDir, 'package.json'),
+      JSON.stringify({ name: 'cgraph-pack-noexport', version: '0.1.0', type: 'module', private: true })
+    );
+    fs.writeFileSync(path.join(packDir, 'index.js'), 'export const notAPack = { id: "x" };\n');
+
+    const { PackRegistry } = await import('../src/packs/registry.js');
+    const { DEFAULTS } = await import('../src/core/config.js');
+    const registry = await PackRegistry.load({
+      ...DEFAULTS, root: fx.root, dir: path.join(fx.root, '.cgraph'),
+      deps: { ...DEFAULTS.deps, offline: true },
+    });
+    assert.ok(registry.packs.get('javascript'), 'builtins survive a malformed external pack');
+    assert.ok(!registry.packs.get('x'), 'the malformed module contributed no pack');
+    registry.dispose();
+  } finally { fx.cleanup(); }
+});
+
+// ------------------------------------------------ technologies: detection
+
+// These drive technologies.js directly against a temp directory. No grammars are
+// needed — detection reads manifests only — so they are not gated on `opts`.
+
+function tempTree(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-tech-'));
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(root, rel.split('/').join(path.sep));
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  }
+  return root;
+}
+
+test('detection finds a manifest at depth 3 and unions node frameworks', () => {
+  // shallowPaths maxDepth=3: apps/web/package.json is reached; the node
+  // frameworks fn scans EVERY package.json (not just root) for react, so a
+  // monorepo app is reported as React, not plain node.
+  const root = tempTree({
+    'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { react: '^18.0.0' } }),
+  });
+  try {
+    const t = detectTechnologies(root);
+    assert.ok(t.stacks.includes('node'), 'node manifest detected at depth 3');
+    assert.ok(t.languages.includes('typescript') && t.languages.includes('javascript'));
+    assert.ok(t.frameworks.includes('react'), 'framework read from the nested manifest');
+    // evidence records the manifest *file name* (basename) that proved the stack.
+    assert.ok(t.evidence.node.includes('package.json'), 'evidence names the proving manifest');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a malformed manifest narrows detection without breaking it', () => {
+  // readJson(): the JSON.parse catch returns null; the node frameworks fn then
+  // `continue`s on a null package, so detection still records the stack from the
+  // file name, reports no frameworks, and never throws.
+  const root = tempTree({ 'package.json': '{ this is not valid json' });
+  try {
+    const t = detectTechnologies(root);
+    assert.ok(t.stacks.includes('node'), 'the stack is detected from the file name');
+    assert.deepEqual(t.frameworks, [], 'a malformed manifest yields no frameworks, no crash');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('languagesToLoad unions present extensions over manifest languages', () => {
+  // languagesToLoad(): manifest languages (node -> js/ts/tsx) unioned with
+  // extensionsPresent (a stray Go file), so discovery narrows eager loading
+  // without ever excluding a language that has files on disk.
+  const root = tempTree({ 'package.json': '{"name":"t"}' });
+  try {
+    const r = languagesToLoad(root, { extensionsPresent: ['go'] });
+    assert.ok(r.languages.includes('javascript') && r.languages.includes('typescript'));
+    assert.ok(r.languages.includes('go'), 'extension-present language is unioned in');
+    assert.equal(r.technologies.stacks.includes('node'), true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('detectSubprojectTechnologies scopes detection to each nested repo', () => {
+  // detectSubprojectTechnologies(): runs detectTechnologies per subproject dir,
+  // keyed by the boundary path the walker recorded.
+  const root = tempTree({
+    'svc1/go.mod': 'module svc1\n',
+    'svc2/Cargo.toml': '[package]\nname = "s2"\n',
+  });
+  try {
+    const out = detectSubprojectTechnologies(root, ['svc1', 'svc2']);
+    assert.ok(out['svc1'].stacks.includes('go'));
+    assert.ok(out['svc2'].stacks.includes('rust'));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

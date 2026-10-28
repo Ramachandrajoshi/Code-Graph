@@ -67,6 +67,7 @@ export function toolDefinitions({ embeddingsEnabled = false } = {}) {
           },
           to: { type: 'string', description: 'Relate: destination symbol, required for direction=path.' },
           depth: { type: 'integer', description: 'Outline: directory levels (default 1). Relate: traversal depth for impact/path.' },
+          detail: { type: 'string', enum: ['outline', 'full'], description: 'Outline verbosity (default "outline"). "full" adds doc comments — more tokens, opt-in.' },
           exact: { type: 'boolean', description: 'Relate: proven edges only, hide name-match guesses.' },
           limit: { type: 'integer', description: 'Relate: max results.' },
           budget,

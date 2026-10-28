@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/core/store.js';
 import { SCHEMA_VERSION } from '../src/core/schema.js';
 
@@ -289,4 +290,122 @@ test('trigrams support substring search that FTS5 cannot do', async () => {
   const hit = store.get('SELECT node_id FROM trigrams WHERE tri = ?', 'ogi');
   assert.equal(hit?.node_id, nodeId, "'ogi' is inside 'handleLogin' but is not a word");
   store.close();
+});
+
+test('a migration that throws is rolled back and reported with its version', async () => {
+  // Covers migrate()'s catch: a migration that fails must ROLLBACK its own
+  // transaction and surface "Migration N (name) failed" — not leave a
+  // half-migrated database and not crash opaquely. The degrade-don't-crash
+  // contract is that the user is told *which* migration broke.
+  //
+  // Inject the failure via SQL: migration v1 runs a bare `CREATE TABLE files`,
+  // which collides with a pre-existing `files` table.
+  const db = new DatabaseSync(':memory:');
+  const store = new Store(db, ':memory:');
+  store._configure();
+  store.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  store.exec('CREATE TABLE files (id INTEGER PRIMARY KEY)'); // collides with v1
+  assert.throws(() => store.migrate(), /Migration 1 \(initial\) failed/);
+  store.close();
+});
+
+test('a database from a newer cgraph is refused with a clear error', async () => {
+  // Covers migrate()'s post-loop version-mismatch throw. A schema_version above
+  // SCHEMA_VERSION means every migration is skipped (m.version <= current), so
+  // `after` stays high and must be rejected — running old code against a newer
+  // schema silently corrupts the index.
+  const store = await Store.memory();
+  store.setMeta('schema_version', String(SCHEMA_VERSION + 100));
+  assert.throws(
+    () => store.migrate(),
+    /does not match expected/,
+    'a newer-than-known schema version must be refused'
+  );
+  store.close();
+});
+
+test('transaction swallows a failing rollback and rethrows the original error', async () => {
+  // Covers the `catch { }` around ROLLBACK in transaction(). When fn() has
+  // already ended the transaction (here by committing), the catch's ROLLBACK
+  // throws "cannot start a transaction within a transaction" — that secondary
+  // error must be swallowed so the caller sees the ORIGINAL failure, not a
+  // confusing rollback error.
+  const { store, fileId } = await fixture();
+  let caught;
+  try {
+    store.transaction(() => {
+      store.run(
+        `INSERT INTO nodes(file_id, kind, name, qname, start_line, end_line, start_byte, end_byte)
+         VALUES(?, 'function', 'kept', 'q', 1, 2, 0, 5)`,
+        fileId
+      );
+      store.db.exec('COMMIT'); // end the tx so the catch's ROLLBACK has nothing to unwind
+      throw new Error('post-commit failure');
+    });
+  } catch (err) {
+    caught = err;
+  }
+  assert.match(caught.message, /post-commit failure/, 'the original error is rethrown, not the rollback error');
+  // fn() committed the row before throwing; the swallowed rollback never ran,
+  // so the write survives. This is the documented behaviour of that branch.
+  assert.equal(store.stats().nodes, 1, 'the committed write is not undone by the swallowed rollback');
+  store.close();
+});
+
+test('_backfillFts indexes nodes from an FTS-less build on the first FTS5 open', async () => {
+  // An index built on a Node without FTS5 has nodes but no fts_map rows. On the
+  // first open where FTS5 is available, ensureSearchIndex must backfill so the
+  // user gets results the machine is capable of — not silently degraded search.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-store-fts-'));
+  const file = path.join(dir, 'index.db');
+  try {
+    // Simulate the legacy, FTS-less index.
+    const db = new DatabaseSync(file);
+    const legacy = new Store(db, file);
+    legacy._configure();
+    legacy.migrate();
+    legacy.ensureSearchIndex({ forceNoFts: true });
+    const fileId = legacy.upsertFile({
+      path: 'src/a.js', lang: 'javascript', pack: 'javascript',
+      hash: 'h', mtime: 1, size: 1, loc: 1, tok: 1, parsed: 1,
+    });
+    legacy.insertNode({
+      fileId, kind: 'function', name: 'handleLogin', qname: 'src/a.js::handleLogin',
+      startLine: 1, endLine: 3, startByte: 0, endByte: 30,
+    });
+    // forceNoFts skips creating the FTS tables entirely — the index is nodes
+    // with fts5='0', the exact state ensureSearchIndex backfills on upgrade.
+    assert.equal(legacy.getMeta('fts5'), '0', 'legacy build recorded no FTS');
+    legacy.close();
+
+    // Reopen on a build WITH FTS5: the backfill must run.
+    const store = await Store.open(file);
+    if (!store.hasFts5) {
+      // Platform without FTS5: the backfill is a no-op by design; nothing to assert.
+      store.close();
+      return;
+    }
+    assert.ok(
+      store.get('SELECT COUNT(*) n FROM fts_map').n >= 1,
+      'ensureSearchIndex backfilled existing nodes into FTS'
+    );
+    const byWord = store.get(
+      `SELECT m.node_id FROM symbols_fts f JOIN fts_map m ON m.rowid = f.rowid
+       WHERE symbols_fts MATCH 'login'`
+    );
+    assert.ok(byWord, "'login' finds 'handleLogin' only because of the backfill");
+    store.close();
+  } finally {
+    // Best-effort: WAL leaves -wal/-shm sidecars that a Windows AV scanner can
+    // hold open long after close(). A leftover OS temp dir is harmless and
+    // keeps the test deterministic; the assertions have all passed by now.
+    try {
+      fs.rmSync(dir, {
+        recursive: true, force: true,
+        maxRetries: 5, retryDelay: 20, retryOnEperm: true,
+      });
+    } catch {
+      // Ignore: cleanup only.
+    }
+  }
 });

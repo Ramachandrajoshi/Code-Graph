@@ -16,8 +16,8 @@ import { StdioServer, textResult, errorResult } from './protocol.js';
 import { toolDefinitions } from './tools.js';
 import { Store } from '../core/store.js';
 import { loadConfig } from '../core/config.js';
-import { outlineFile, outlineDir, findSymbol } from '../core/retrieve.js';
-import { search, renderHits } from '../core/search.js';
+import { outlineFile, outlineDir, findSymbol, formatConfidence } from '../core/retrieve.js';
+import { search, renderHits, suggestSymbols, formatSuggestions, indexIsEmpty } from '../core/search.js';
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../core/graph.js';
 import { degree } from '../core/rank.js';
 import { UsageLedger, fitToBudget } from '../core/tokens.js';
@@ -139,7 +139,10 @@ function toolMap(store, config, args, ledger) {
   const file = target ? store.getFileByPath(target) : null;
 
   const result = file
-    ? outlineFile(store, file, { budget: budgetOf(args), kinds: args.kinds ?? null, maxDepth: args.depth ?? 99 })
+    ? outlineFile(store, file, {
+        budget: budgetOf(args), kinds: args.kinds ?? null, maxDepth: args.depth ?? 99,
+        detail: args.detail ?? 'outline',
+      })
     : outlineDir(store, target, { depth: args.depth ?? 1, budget: budgetOf(args) });
 
   // A path that is neither a file nor a directory prefix is usually a wrong
@@ -167,11 +170,14 @@ function toolFind(store, config, args, ledger) {
   });
 
   if (!hits.length) {
-    return textResult(
-      `No symbols matching '${args.query}'.\n` +
-        'The symbol may be defined dynamically, live in a language with no extraction ' +
-        'queries yet, or the index may be stale — run `cgraph update` to check.'
-    );
+    // A filter that emptied a non-empty candidate set is NOT the same as "no
+    // matches exist" (truncate-loudly). search() attaches filterNote for that
+    // case; surface it verbatim so the agent questions the filter instead of
+    // concluding the symbol is absent.
+    if (hits.filterNote) {
+      return textResult(hits.filterNote);
+    }
+    return textResult(formatSuggestions(store, args.query) + staleness(store));
   }
 
   const fitted = fitToBudget(renderHits(hits), budgetOf(args));
@@ -188,7 +194,14 @@ function toolGraph(store, config, args, ledger) {
   const direction = args.direction ?? 'callers';
   const matches = findSymbol(store, args.symbol, { limit: 3 });
   if (!matches.length) {
-    return errorResult(`No symbol named '${args.symbol}'. Use find to search for it.`);
+    // Self-correctable, not a dead end (MCP spec §Error Handling): the model can
+    // retry from the closest real symbols. isError stays true so the harness
+    // treats it as a tool failure, and the "No symbol named" lead-in is kept so
+    // existing consumers that match on it are unaffected.
+    return errorResult(
+      `No symbol named '${args.symbol}'. Use find to search for it.\n\n` +
+        formatSuggestions(store, args.symbol)
+    );
   }
   const node = matches[0];
   const lines = [];
@@ -199,12 +212,12 @@ function toolGraph(store, config, args, ledger) {
     lines.push(`${node.qname}  ${node.path}:${node.start_line}`, `callers: ${d.callers}  callees: ${d.callees}`, '');
     if (!rows.length) lines.push('(no callers — entry point, dead code, or called dynamically)');
     for (const r of rows) {
-      lines.push(`${r.confidence === 'EXACT' ? ' ' : '!'} ${r.qname}  ${r.path}:${r.line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
+      lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
     }
   } else if (direction === 'callees') {
     const { internal, external } = callees(store, node.id, { limit: 60 });
     lines.push(`${node.qname} calls:`, '');
-    for (const r of internal) lines.push(`${r.confidence === 'EXACT' ? ' ' : '!'} ${r.qname}  ${r.path}:${r.start_line}`);
+    for (const r of internal) lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}`);
     if (external.length) {
       lines.push('', 'external:');
       for (const r of external) lines.push(`  ${r.package}${r.symbol ? '.' + r.symbol : ''} (${r.ecosystem})`);
@@ -222,7 +235,7 @@ function toolGraph(store, config, args, ledger) {
     let d = 0;
     for (const r of result.nodes) {
       if (r.distance !== d) { d = r.distance; lines.push(`${d === 1 ? 'direct' : d + ' hops'}:`); }
-      lines.push(`${r.confidence === 'EXACT' ? ' ' : '!'} ${r.qname}  ${r.path}:${r.start_line}`);
+      lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}`);
     }
     if (result.truncated) lines.push('', '(truncated — this symbol is central)');
   } else if (direction === 'path') {
@@ -245,13 +258,13 @@ function toolGraph(store, config, args, ledger) {
     lines.push(`called from (bottom-up, ${d.callers}):`);
     if (!callerRows.length) lines.push('  (no callers — entry point, dead code, or called dynamically)');
     for (const r of callerRows) {
-      lines.push(`${r.confidence === 'EXACT' ? ' ' : '!'} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
+      lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
     }
 
     const { internal, external } = callees(store, node.id, { limit: args.limit ?? 30 });
     lines.push('', `calls (top-down, ${d.callees}):`);
     if (!internal.length && !external.length) lines.push('  (calls nothing this index knows about)');
-    for (const r of internal) lines.push(`${r.confidence === 'EXACT' ? ' ' : '!'} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}`);
+    for (const r of internal) lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}`);
     if (external.length) {
       lines.push('  external:');
       for (const r of external) lines.push(`    ${r.package}${r.symbol ? '.' + r.symbol : ''} (${r.ecosystem})`);

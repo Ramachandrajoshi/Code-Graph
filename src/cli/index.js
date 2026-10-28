@@ -67,7 +67,7 @@ export async function main(argv) {
   const args = parseArgs(argv, {
     // `agent` must consume a value, or `--agent claude` parses 'claude' as a
     // positional and the flag silently becomes `true`.
-    strings: ['root', 'path', 'lang', 'kind', 'mode', 'dir', 'symbol', 'q', 'agent', 'grammar', 'to'],
+    strings: ['root', 'path', 'lang', 'kind', 'mode', 'dir', 'symbol', 'q', 'agent', 'grammar', 'to', 'detail'],
     numbers: ['budget', 'depth', 'limit', 'workers'],
     alias: { h: 'help', v: 'version', q: 'query' },
   });

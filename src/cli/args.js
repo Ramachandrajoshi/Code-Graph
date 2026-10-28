@@ -19,6 +19,16 @@ export function parseArgs(argv, spec = {}) {
   const alias = spec.alias ?? {};
   const out = { _: [] };
 
+  // One source of truth for "does this flag consume the next argv as its value".
+  // Specs list the alias KEY (e.g. 'q') in `strings`/`numbers`, not the resolved
+  // name ('query'), so a flag consumes a value when EITHER its raw form OR its
+  // resolved alias name is declared. The long and short branches MUST share this
+  // check: when only the long branch consulted the raw key, `-q foo` resolved the
+  // name to 'query', missed the 'q' entry, and silently dropped the value into
+  // positionals while `--q foo` worked — the two forms drifted.
+  const consumesValue = (raw, name) =>
+    strings.has(raw) || strings.has(name) || numbers.has(raw) || numbers.has(name);
+
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
 
@@ -44,7 +54,7 @@ export function parseArgs(argv, spec = {}) {
 
       const name = camel(alias[key] ?? key);
       if (value === undefined) {
-        if (strings.has(key) || strings.has(name) || numbers.has(key) || numbers.has(name)) {
+        if (consumesValue(key, name)) {
           value = argv[++i];
         } else {
           value = true;
@@ -58,8 +68,11 @@ export function parseArgs(argv, spec = {}) {
       const flags = arg.slice(1).split('');
       for (let j = 0; j < flags.length; j++) {
         const name = camel(alias[flags[j]] ?? flags[j]);
+        // Cluster semantics: only the last char of `-abc` may consume a value,
+        // so a boolean cluster like `-jq` stays two booleans and never swallows
+        // the next argv.
         const isLast = j === flags.length - 1;
-        if (isLast && (strings.has(name) || numbers.has(name))) {
+        if (isLast && consumesValue(flags[j], name)) {
           out[name] = coerce(name, argv[++i], numbers);
         } else {
           out[name] = true;

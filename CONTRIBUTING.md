@@ -10,7 +10,7 @@ first and deliberately made easy.
 git clone https://github.com/Ramachandrajoshi/Code-Graph.git
 cd Code-Graph
 npm install
-npm test          # 231 tests, ~30s
+npm test          # ~509 tests, ~30s
 npm run bench     # response sizes (regression guard, not a savings claim)
 ```
 
@@ -197,6 +197,42 @@ matters. A test named `it works` teaches nobody why the code is shaped that way.
 
 Tests must not touch `~/.cgraph` — `buildFixture` redirects the cache
 automatically.
+
+### Coverage and the not-feasible regions
+
+`npm run test:coverage` runs the suite under `node --test`'s built-in V8
+coverage (`--experimental-test-coverage --test-coverage-include="src/**"`).
+At the time of writing all-files coverage is ~95% line / ~85% branch /
+~90% function. We deliberately do **not** chase 100%: the remaining gaps are
+code paths that cannot be exercised on this platform without a network, an
+installed language server, a second SQLite driver, or a live stdio MCP child
+process — none of which the test suite has. Built-in V8 coverage does not
+honour istanbul/c8 ignore comments, so we record these here instead of
+excluding them in source. Do not add mocks that fake a network, a CDN, an
+LSP, or `better-sqlite3` just to move a number.
+
+Known, intentionally-uncovered regions:
+
+- `core/store.js` — the `better-sqlite3` fallback and the "no driver
+  installed" branch. On Node >= 22 the `node:sqlite` driver always wins, so
+  those branches are dead here.
+- `core/grammars.js` — the `download()`/unpkg CDN fetch path. The suite runs
+  offline against vendored WASMs; there is no network to hit.
+- `embed/index.js` — the provider HTTP bodies (`embed()`, the live body of
+  `embedIndex`, `semanticSearch`). No embedding endpoint or API key in CI.
+- `lsp/client.js` — spawning a real language server, its 15s init timeout, and
+  the live `upgradeFile` path. No language server is installed in CI.
+- `cli/commands/serve.js` — booting the real stdio MCP server and the
+  startup-failure `process.exit` path. The MCP layer is exercised in-process
+  (see `test/mcp.test.js`); spawning a child that exits is not testable here.
+- `mcp/server.js` — `Refresher._run`'s refresh-throw catch, the embeddings-ON
+  branch of `toolSimilar`, and the racy `inFlight` de-duplication (a
+  timing-dependent test would be flaky, so it is intentionally not shipped).
+- `mcp/protocol.js` — a couple of optional-chaining sub-branches not
+  observable through the real server request flow.
+
+If one of these becomes feasible for real (e.g. an LSP in CI, an embedding
+fake server), write the genuine test and delete the matching line above.
 
 ---
 

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { PackRegistry } from '../src/packs/registry.js';
 import { DEFAULTS } from '../src/core/config.js';
+import { extract } from '../src/core/extract.js';
 
 const require = createRequire(import.meta.url);
 const haveBundled = (() => {
@@ -250,4 +251,66 @@ export class Broken {
   method(: {{{
 `);
   assert.ok(Array.isArray(nodes));
+});
+
+// ------------------------------------------------- same-range tiebreak
+//
+// The containment sweep pops the stack when `endByte <= startByte` and the sort
+// tiebreak is `b.endByte - a.endByte`. For two sibling definitions with an
+// IDENTICAL byte range but DIFFERENT names, the comparator returns 0, so the
+// order is whatever the captures arrived in — and whichever is processed first
+// ends up the parent of the other (the second nests under the first's stack
+// entry). Real grammars rarely emit same-range/different-name captures, so this
+// edge was untested. The guard: the parent-child assignment must be DETERMINISTIC
+// (stable across repeated calls) and every child range must sit inside its
+// parent. `Array.prototype.sort` is stable (ES2019), so equal-keyed definitions
+// keep capture order and the first-captured becomes the parent — we pin that.
+
+function sameRangeExtract(nameOrder) {
+  const source = 'function a() {}\nfunction b() {}\n';
+  // Both definitions share the exact range [0,16); only names differ.
+  const mk = (name) => ({
+    captures: [
+      { name: 'name', text: name, startByte: 0, endByte: 9, startLine: 1, endLine: 1, startCol: 9, type: 'identifier' },
+      { name: 'definition.function', text: source.slice(0, 16), startByte: 0, endByte: 16, startLine: 1, endLine: 1, startCol: 0, type: 'function_declaration' },
+    ],
+  });
+  return extract({
+    path: 'a.js',
+    source,
+    captures: { tags: nameOrder.map(mk), imports: [] },
+    pack: {},
+  });
+}
+
+test('same-range, different-name definitions get a deterministic parent', opts, () => {
+  const first = sameRangeExtract(['Alpha', 'Beta']);
+  const second = sameRangeExtract(['Alpha', 'Beta']);
+
+  const shape = ({ nodes }) =>
+    nodes.map((n) => `${n.name}::${n.parentIndex === null ? '-' : nodes[n.parentIndex].name}`);
+
+  // Determinism: identical input order must yield identical parent assignment.
+  assert.deepEqual(shape(first), shape(second), 'repeated extraction must be stable');
+
+  // With a stable sort, the first-captured definition is the parent; the second
+  // nests under it, and its range is inside the parent (identical range).
+  const alpha = first.nodes.find((n) => n.name === 'Alpha');
+  const beta = first.nodes.find((n) => n.name === 'Beta');
+  assert.ok(alpha && beta, 'both same-range definitions are kept (dedupe keys on name)');
+  assert.equal(first.nodes[alpha.parentIndex].kind, 'module', 'first-captured attaches to the module');
+  assert.equal(first.nodes[beta.parentIndex].name, 'Alpha', 'second nests under the first');
+
+  // Inversion of capture order inverts the parent — deterministic by capture
+  // order, not arbitrary.
+  const inv = sameRangeExtract(['Beta', 'Alpha']);
+  const invAlpha = inv.nodes.find((n) => n.name === 'Alpha');
+  assert.equal(inv.nodes[invAlpha.parentIndex].name, 'Beta', 'capture order is the tiebreak');
+
+  // Every child range stays inside its parent (identical ranges satisfy this).
+  for (const n of first.nodes) {
+    if (n.parentIndex === null) continue;
+    const p = first.nodes[n.parentIndex];
+    assert.ok(n.startByte >= p.startByte && n.endByte <= p.endByte, `${n.name} escapes its parent`);
+  }
 });

@@ -39,7 +39,7 @@ export function callers(store, nodeId, { limit = 50, minConfidence = null } = {}
        JOIN files f ON f.id = n.file_id
       WHERE e.dst_id = ? ${filter}
       GROUP BY n.id
-      ORDER BY n.rank DESC, f.path
+      ORDER BY n.rank DESC, f.path, n.id
       LIMIT ?`,
     nodeId, limit
   );
@@ -54,17 +54,17 @@ export function callees(store, nodeId, { limit = 50 } = {}) {
        JOIN nodes n ON n.id = e.dst_id
        JOIN files f ON f.id = n.file_id
       WHERE e.src_id = ?
-      ORDER BY e.line
+      ORDER BY e.line, n.id
       LIMIT ?`,
-    nodeId, limit
-  );
+   nodeId, limit
+ );
 
-  const external = store.all(
-    `SELECT DISTINCT x.package, x.symbol, x.ecosystem, e.confidence, e.line
-       FROM edges e JOIN externals x ON x.id = e.ext_id
-      WHERE e.src_id = ?
-      ORDER BY e.line
-      LIMIT ?`,
+ const external = store.all(
+   `SELECT DISTINCT x.package, x.symbol, x.ecosystem, e.confidence, e.line
+      FROM edges e JOIN externals x ON x.id = e.ext_id
+     WHERE e.src_id = ?
+     ORDER BY e.line, x.id
+     LIMIT ?`,
     nodeId, limit
   );
 
@@ -110,7 +110,7 @@ export function impact(store, nodeId, { depth = 3, limit = 200, minConfidence = 
          JOIN nodes n ON n.id = e.src_id
          JOIN files f ON f.id = n.file_id
         WHERE e.dst_id IN (${holes}) ${filter}
-        ORDER BY n.rank DESC`,
+        ORDER BY n.rank DESC, n.id`,
       ...frontier
     );
 

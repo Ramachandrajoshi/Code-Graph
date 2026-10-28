@@ -296,3 +296,107 @@ test('resolution stats are reported honestly', opts, async () => {
     assert.equal(rows.length, 1, 'unresolved references are kept for doctor');
   } finally { fx.cleanup(); }
 });
+
+// ------------------------------------------------- TypeScript alias plumbing
+//
+// These pin the branches in the TypeScript pack's loadAliases/resolveAlias/
+// stripJsonComments. A repo that uses path aliases is exactly the shape where
+// the graph silently loses every EXACT internal edge, so each alias nuance is
+// a real-world failure mode, not a contrived one.
+
+test('applies tsconfig baseUrl as a prefix to alias targets', opts, async () => {
+  // baseUrl: 'src' means a target of '*' is relative to src/, so the resolved
+  // base must be 'src/lib' not 'lib'. Missing the prefix resolves nothing.
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'tsconfig.json': JSON.stringify({
+      compilerOptions: { baseUrl: 'src', paths: { '@x/*': ['*'] } },
+    }),
+    'src/lib.ts': 'export function go() {}\n',
+    'src/main.ts': "import { go } from '@x/lib';\nexport function start() { go(); }\n",
+  });
+  try {
+    assert.equal(fx.importOf('src/main.ts', '@x/lib').resolved_path, 'src/lib.ts');
+    assert.equal(fx.edge('start', 'go').confidence, 'EXACT');
+  } finally { fx.cleanup(); }
+});
+
+test('reads aliases from jsconfig.json', opts, async () => {
+  // Plain-JS projects use jsconfig.json; loadAliases must read it too, or those
+  // repos get no EXACT alias edges at all.
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'jsconfig.json': JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '#/*': ['src/*'] } },
+    }),
+    'src/lib.js': 'export function go() {}\n',
+    'src/main.js': "import { go } from '#/lib';\nexport function start() { go(); }\n",
+  });
+  try {
+    assert.equal(fx.importOf('src/main.js', '#/lib').resolved_path, 'src/lib.js');
+  } finally { fx.cleanup(); }
+});
+
+test('a malformed tsconfig is ignored, not fatal', opts, async () => {
+  // Degrade, don't crash: a tsconfig that can't be parsed after comment
+  // stripping must fall back to treating the import as a bare specifier.
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'tsconfig.json': '{ this is not json at all',
+    'src/lib.ts': 'export function go() {}\n',
+    'src/main.ts': "import { go } from '@broken/lib';\nexport function start() { go(); }\n",
+  });
+  try {
+    const imp = fx.importOf('src/main.ts', '@broken/lib');
+    // With no usable config the alias is unknown, so it is external, not a file.
+    assert.equal(imp.ext_package, '@broken/lib',
+      'an unparseable config must not throw; the specifier falls through to npm');
+  } finally { fx.cleanup(); }
+});
+
+test('a tsconfig path target that does not exist resolves to nothing', opts, async () => {
+  // resolveAlias yields candidate bases; tryCandidates must miss and the import
+  // end up external. Guards the "no hit" path for aliased specifiers.
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'tsconfig.json': JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '@app/*': ['src/*'] } },
+    }),
+    'src/main.ts': "import { thing } from '@app/missing';\nexport function start() { thing(); }\n",
+  });
+  try {
+    const imp = fx.importOf('src/main.ts', '@app/missing');
+    assert.equal(imp.ext_package, '@app/missing',
+      'an alias with no matching file is external, not silently dropped');
+  } finally { fx.cleanup(); }
+});
+
+test('arrow-function definitions get a signature without the body', opts, async () => {
+  // findBodyStart's `=>` branch: for an arrow definition the body begins at the
+  // arrow, so the stored signature must stop before the arrow's expression.
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'src/a.ts': 'export const add = (a: number, b: number): number => a + b;\n',
+  });
+  try {
+    const node = fx.node('add');
+    assert.ok(node, 'the arrow const should be indexed as a definition');
+    assert.ok(node.signature.includes('add'), 'signature names the symbol');
+    assert.ok(node.signature.includes('a: number'), 'signature keeps parameter types');
+    assert.ok(!node.signature.includes('a + b'), 'signature excludes the arrow body');
+  } finally { fx.cleanup(); }
+});
+
+test('node: builtins classify as a node ecosystem', opts, async () => {
+  // `node:` prefixed imports carry a distinct ecosystem and the prefix is
+  // stripped from the package name; conflating them with npm pollutes dep docs.
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'src/a.ts': "import fs from 'node:fs';\nexport function go() { return fs; }\n",
+  });
+  try {
+    const imp = fx.importOf('src/a.ts', 'node:fs');
+    assert.equal(imp.ecosystem, 'node');
+    assert.equal(imp.ext_package, 'fs', 'the node: prefix is stripped from the package');
+  } finally { fx.cleanup(); }
+});

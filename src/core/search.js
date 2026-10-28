@@ -50,7 +50,10 @@ export function search(store, query, opts = {}) {
   for (const row of exactMatches(store, q)) add(row, 100, 'exact');
   for (const row of prefixMatches(store, q)) add(row, 40, 'prefix');
   // FTS5 is unavailable in many Node builds, so the text strategy has two
-  // implementations and the caller cannot tell which ran.
+  // implementations and the caller cannot tell which ran. Both now draw on the
+  // SAME sanitized term list (see buildTerms) so the candidate SET they feed
+  // into scoring is the same modulo the LIKE/FTS5 token-boundary difference
+  // that `trigramMatches` already covers in both paths.
   for (const row of textMatches(store, q)) add(row, 25, 'text');
   for (const row of trigramMatches(store, q)) add(row, 10, 'fuzzy');
   // Files with no symbols (images, binaries, oversized, generated, ...) are
@@ -61,7 +64,8 @@ export function search(store, query, opts = {}) {
   // named after a query never buries the code that actually answers it.
   for (const row of fileMatches(store, q)) add(row, 8, 'file');
 
-  const filtered = [...scores.values()].filter(({ node }) => {
+  const unfiltered = [...scores.values()];
+  const filtered = unfiltered.filter(({ node }) => {
     if (kind && node.kind !== kind) return false;
     if (lang && node.lang !== lang) return false;
     if (path && !node.path.startsWith(path)) return false;
@@ -75,8 +79,158 @@ export function search(store, query, opts = {}) {
     hit.final = hit.score * (1 + hit.node.rank * 2);
   }
 
-  filtered.sort((a, b) => b.final - a.final || a.node.qname.localeCompare(b.node.qname));
-  return filtered.slice(0, limit);
+  // Deterministic ordering (MCP spec: stable order improves prompt-cache hits):
+  // SQLite does not guarantee ordering for tied keys, and PageRank/score ties
+  // shuffle rows across runs. The `id` tiebreak resolves rows that tie on BOTH
+  // final score and qname. It never reorders the primary ranking — it only
+  // stabilizes rows the ranking already considers equal.
+  filtered.sort(
+    (a, b) =>
+      b.final - a.final ||
+      a.node.qname.localeCompare(b.node.qname) ||
+      a.node.id - b.node.id
+  );
+  const result = filtered.slice(0, limit);
+
+  // TRUNCATE LOUDLY (AGENTS.md): a filter typo, an out-of-enum kind, or a
+  // language whose pack never loaded turns a real set of matches into an empty
+  // result that reads exactly like "nothing exists here" — the agent stops
+  // looking. When a filter is set and it is the filter that emptied a non-empty
+  // candidate set, say so and give the count so the caller can question the
+  // filter. Purely additive; the result array is unchanged when matches survive.
+  if (result.length === 0 && unfiltered.length > 0) {
+    const setFilters = [];
+    if (kind) setFilters.push('--kind');
+    if (lang) setFilters.push('--lang');
+    if (path) setFilters.push('--path');
+    if (setFilters.length) {
+      result.filterNote =
+        `${unfiltered.length} symbol${unfiltered.length === 1 ? '' : 's'} matched ` +
+        `'${q}'; all excluded by your ${setFilters.join(' / ')} filter — ` +
+        `check the filter value (drop it to see them)`;
+    }
+  }
+  return result;
+}
+
+/**
+ * Closest real symbol names to a query, for the no-match case.
+ *
+ * WHY this exists: a bare "nothing found" is a dead end, and an agent stops
+ * looking at a dead end (AGENTS.md: truncate loudly, degrade gracefully). The
+ * Anthropic "Writing Effective Tools" guidance is that a tool error should be
+ * self-correctable — the model can retry from it. The correction here is the
+ * real symbol the user almost certainly meant.
+ *
+ * NEVER GUESS SILENTLY: every suggestion is a row from the live `trigrams`
+ * join, scored by trigram overlap against the query. Nothing is fabricated. If
+ * no real symbol clears `minShare`, the list is empty and the caller says so —
+ * inventing a plausible name would send the agent chasing a symbol that does
+ * not exist, which is the exact failure mode "never guess" forbids.
+ *
+ * It is deliberately LOOSER than search(): a lower trigram threshold surfaces
+ * the typo'd near-miss ("handlLogin" -> "handleLogin") that search()'s stricter
+ * scoring already rejected. Results are deduped by node and ordered on a total
+ * key (overlap, rank, id) so the suggestion list is byte-stable across runs.
+ *
+ * @returns {{name:string,qname:string,path:string,kind:string}[]} at most `limit`,
+ *          empty when the index has no symbol above the floor (or is empty).
+ */
+export function suggestSymbols(store, query, { limit = 5, minShare = 0.5 } = {}) {
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 3) return [];
+
+  const tris = trigrams(q);
+  if (!tris.length) return [];
+
+  // Surface every node sharing at least one query trigram (threshold 1), then
+  // apply the similarity floor in JS so it is a clean share of the query's
+  // trigrams. The LIMIT is generous because the floor + cap run afterwards; a
+  // tight SQL LIMIT would drop the best matches on a large index.
+  const holes = tris.map(() => '?').join(',');
+  const rows = store.all(
+    `SELECT n.id, n.name, n.qname, n.kind, n.rank, f.path,
+            COUNT(DISTINCT t.tri) AS shared
+       FROM trigrams t
+       JOIN nodes n ON n.id = t.node_id
+       JOIN files f ON f.id = n.file_id
+      WHERE t.tri IN (${holes}) AND n.kind != 'module'
+      GROUP BY n.id
+       ORDER BY shared DESC, n.rank DESC, n.id
+       LIMIT 80`,
+    ...tris
+  );
+
+  const floor = tris.length * minShare;
+  const out = [];
+  const seen = new Set();
+  for (const r of rows) {
+    if (r.shared < floor) break; // rows are ordered by shared DESC
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    out.push({ name: r.name, qname: r.qname, path: r.path, kind: r.kind });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** True when the index has no symbols at all (unbuilt/empty), so callers say so. */
+export function indexIsEmpty(store) {
+  const row = store.get('SELECT COUNT(*) AS c FROM nodes');
+  return !row || row.c === 0;
+}
+
+/**
+ * Compact, actionable text for a no-match result — shared by `find` and
+ * `map`(symbol) on both the CLI and MCP paths so the two never drift.
+ *
+ * Mirrors search()'s `filterNote` guidance for the DISTINCT no-filter case:
+ * name the closest REAL symbols (suggestSymbols), and remind about staleness.
+ * Never fabricates — if nothing clears the similarity floor it says "no close
+ * matches". Kept terse: these lines are paid for in tokens on every miss.
+ */
+export function formatSuggestions(store, query) {
+  if (indexIsEmpty(store)) {
+    return `No index found — run \`cgraph init\` (or \`cgraph update\`) to build one before searching.`;
+  }
+  const sugs = suggestSymbols(store, query, { limit: 5 });
+  const lines = [
+    // Lead-in keeps the pre-existing "No symbols matching '<q>'" phrasing so
+    // existing consumers (and the freshness tests) keep matching.
+    `No symbols matching '${query}'.`,
+    sugs.length
+      ? `Did you mean: ${sugs.map((s) => s.name).join(', ')}?`
+      : 'No close matches in the index.',
+    'The symbol may be defined dynamically, live in a language with no extraction ' +
+      'queries yet, or the index may be stale — run `cgraph update` to check.',
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * The shared, sanitized term list used by BOTH text paths.
+ *
+ * FTS5 treats `-`, `*`, `"`, `:` and friends as operators, so a raw query
+ * ("get-user", "foo:bar") is a syntax error there; the FTS5 path strips
+ * non-alphanumerics. The LIKE path historically kept the RAW query as a
+ * contiguous substring term (`%get-user%`) *in addition to* the split words —
+ * so the two paths fed the scorer different terms and the caller could not tell
+ * which ran. This single builder makes both consume the SAME terms.
+ *
+ * WHY dropping the raw-with-operators term is set-neutral for LIKE: any string
+ * that contains the contiguous substring "get-user" necessarily contains
+ * "get" and "user", so the sanitized fragments already subsume it; keeping it
+ * added divergence (ordering, and substring matches FTS5 can never produce) for
+ * no extra hits. The residual LIKE-vs-FTS5 gap is substring-contains vs
+ * token-prefix; that is inherent to a LIKE scan and is covered in BOTH paths by
+ * `trigramMatches`, so the goal here is parity of the candidate SET, not
+ * identical ranking — the scorer re-ranks by `rank`, so bm25-vs-LIKE ordering
+ * is not load-bearing.
+ */
+function buildTerms(q) {
+  return [...new Set([...q.split(/\s+/), ...splitIdentifier(q)])]
+    .map((t) => t.replace(/[^\p{L}\p{N}_]/gu, ''))
+    .filter((t) => t.length >= 2);
 }
 
 function baseSelect(extra) {
@@ -87,8 +241,12 @@ function baseSelect(extra) {
 }
 
 function exactMatches(store, q) {
+  // `n.id` is the deterministic tiebreak (MCP spec: stable ordering improves
+  // prompt-cache hits). At the LIMIT boundary SQLite may drop a different tied
+  // row each run, changing the candidate SET that reaches scoring; a total order
+  // on (rank, id) makes the surviving set byte-stable.
   return store.all(
-    baseSelect(`WHERE n.name = ? AND n.kind != 'module' ORDER BY n.rank DESC LIMIT 50`),
+    baseSelect(`WHERE n.name = ? AND n.kind != 'module' ORDER BY n.rank DESC, n.id LIMIT 50`),
     q
   );
 }
@@ -97,7 +255,7 @@ function prefixMatches(store, q) {
   if (q.length < 2) return [];
   return store.all(
     baseSelect(`WHERE n.name LIKE ? AND n.name != ? AND n.kind != 'module'
-                ORDER BY n.rank DESC LIMIT 50`),
+                ORDER BY n.rank DESC, n.id LIMIT 50`),
     `${q}%`, q
   );
 }
@@ -123,9 +281,10 @@ function textMatches(store, q) {
  * which is the behaviour users would most notice losing.
  */
 function likeMatches(store, q) {
-  const terms = [...new Set([...q.split(/\s+/), ...splitIdentifier(q)])]
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
+  // Same sanitized terms as the FTS5 path (see buildTerms): the prior LIKE path
+  // also searched the RAW query with its operator chars as a `%...%` substring,
+  // which FTS5 could never match — the source of the path divergence.
+  const terms = buildTerms(q);
 
   if (!terms.length) return [];
 
@@ -144,7 +303,7 @@ function likeMatches(store, q) {
             n.end_line, n.rank, n.is_exported, f.path, f.lang, f.subproject
        FROM nodes n JOIN files f ON f.id = n.file_id
       WHERE n.kind != 'module' AND (${clauses.join(' OR ')})
-      ORDER BY n.rank DESC
+      ORDER BY n.rank DESC, n.id
       LIMIT 60`,
     ...params
   );
@@ -158,9 +317,7 @@ function likeMatches(store, q) {
  * ("get-user" or "foo:bar") is a syntax error rather than a search.
  */
 function ftsMatches(store, q) {
-  const terms = [...new Set([...q.split(/\s+/), ...splitIdentifier(q)])]
-    .map((t) => t.replace(/[^\p{L}\p{N}_]/gu, ''))
-    .filter((t) => t.length >= 2);
+  const terms = buildTerms(q);
 
   if (!terms.length) return [];
 
@@ -177,7 +334,7 @@ function ftsMatches(store, q) {
          JOIN nodes n ON n.id = m.node_id
          JOIN files f ON f.id = n.file_id
         WHERE symbols_fts MATCH ? AND n.kind != 'module'
-        ORDER BY bm25(symbols_fts) LIMIT 60`,
+        ORDER BY bm25(symbols_fts), n.id LIMIT 60`,
       expr
     );
   } catch {
@@ -241,7 +398,7 @@ function trigramMatches(store, q) {
       WHERE t.tri IN (${holes}) AND n.kind != 'module'
       GROUP BY n.id
      HAVING COUNT(DISTINCT t.tri) >= ?
-      ORDER BY COUNT(DISTINCT t.tri) DESC, n.rank DESC
+      ORDER BY COUNT(DISTINCT t.tri) DESC, n.rank DESC, n.id
       LIMIT 40`,
     ...tris, threshold
   );
@@ -255,6 +412,11 @@ function trigramMatches(store, q) {
  */
 export function renderHits(hits, { showWhy = false } = {}) {
   const lines = [];
+  // `search()` attaches a filterNote when a filter emptied an otherwise
+  // non-empty result. Rendering it here means every consumer (CLI find, MCP
+  // find) shows the guidance for free, and a silent-empty truncation is
+  // impossible.
+  if (hits.filterNote) lines.push(hits.filterNote);
   let i = 1;
   for (const hit of hits) {
     const n = hit.node;

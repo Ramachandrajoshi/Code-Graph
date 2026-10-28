@@ -4,7 +4,7 @@
 
 import { loadConfig } from '../../core/config.js';
 import { Store } from '../../core/store.js';
-import { search, renderHits } from '../../core/search.js';
+import { search, renderHits, suggestSymbols } from '../../core/search.js';
 import { UsageLedger } from '../../core/tokens.js';
 import { fitToBudget } from '../../core/tokens.js';
 import { out, json, color } from '../ui.js';
@@ -36,9 +36,22 @@ export async function run(args) {
     }
 
     if (!hits.length) {
+      // search() flags the distinct case of a filter that emptied a non-empty
+      // candidate set (a --lang/--path/kind typo reads identically to "nothing
+      // exists"). Say so, with the count, so the agent checks the filter.
+      if (hits.filterNote) {
+        out(color.dim(hits.filterNote));
+        return;
+      }
       out(`no symbols matching '${query}'`);
-      // A miss is worth two lines of guidance: the most common cause is a stale
-      // index, and the agent has no other way to know that.
+      // Self-correctable, not a dead end: surface the closest REAL symbols from
+      // the live index (suggestSymbols never fabricates), so an agent retries
+      // from the name it meant instead of concluding the symbol is absent — the
+      // silent truncation AGENTS.md forbids. The update hint covers staleness.
+      const sugs = suggestSymbols(store, query, { limit: 5 });
+      if (sugs.length) {
+        out(color.dim(`did you mean: ${sugs.map((s) => s.name).join(', ')}?`));
+      }
       out(color.dim('try `cgraph update` if the code changed, or a shorter query'));
       return;
     }

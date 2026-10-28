@@ -20,8 +20,11 @@ export async function run(args) {
     const kinds = args.kind ? args.kind.split(',').map((k) => k.trim()) : null;
 
     const file = target ? store.getFileByPath(target) : null;
+    // `--detail full` adds doc comments per symbol (opt-in context). Default
+    // 'outline' reproduces the prior output byte-for-byte.
+    const detail = args.detail === 'full' ? 'full' : 'outline';
     const result = file
-      ? outlineFile(store, file, { budget, kinds, maxDepth: args.depth ?? 99 })
+      ? outlineFile(store, file, { budget, kinds, maxDepth: args.depth ?? 99, detail })
       : outlineDir(store, target, { depth: args.depth ?? 1, budget });
 
     new UsageLedger(store).record('map', result.tokens, result.baseline);
@@ -67,9 +70,10 @@ ${color.bold('cgraph map')} — outline the repo, a directory, or a file
   cgraph map src/auth/login.ts  Symbol outline for one file
 
 ${color.bold('OPTIONS')}
-  --depth <n>     Directory levels to expand (default 1)
-  --kind <list>   Only these kinds, e.g. class,function
-  --budget <n>    Cap the response in tokens
-  --json          Machine-readable output
+  --depth <n>       Directory levels to expand (default 1)
+  --kind <list>     Only these kinds, e.g. class,function
+  --detail <mode>   File outline: outline (default) | full (adds doc comments)
+  --budget <n>      Cap the response in tokens
+  --json            Machine-readable output
 `);
 }

@@ -8,7 +8,7 @@
 
 import { loadConfig } from '../../core/config.js';
 import { Store } from '../../core/store.js';
-import { findSymbol } from '../../core/retrieve.js';
+import { findSymbol, formatConfidence } from '../../core/retrieve.js';
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../../core/graph.js';
 import { degree } from '../../core/rank.js';
 import { UsageLedger, fitToBudget } from '../../core/tokens.js';
@@ -100,9 +100,14 @@ function findFileByName(store, target) {
   );
 }
 
-/** `!` marks an inferred edge, so a reader never mistakes a guess for a fact. */
+/**
+ * `!` marks an inferred edge, so a reader never mistakes a guess for a fact.
+ *
+ * Delegates to the shared core formatter (the same one the MCP server uses) so
+ * the CLI and MCP legends can never drift apart.
+ */
 function confMark(confidence) {
-  return confidence === 'EXACT' ? ' ' : '!';
+  return formatConfidence(confidence);
 }
 
 function renderCallers(store, node, args, lines) {

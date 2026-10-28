@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { buildFixture } from './fixture.js';
-import { search } from '../src/core/search.js';
+import { search, renderHits, suggestSymbols } from '../src/core/search.js';
 import { callers, callees, impact, shortestPath, importers } from '../src/core/graph.js';
 import { computeRanks } from '../src/core/rank.js';
 
@@ -132,6 +132,84 @@ test('limit is respected', opts, async () => {
   } finally { fx.cleanup(); }
 });
 
+// ------------------------------------------------- deterministic ordering (#3)
+//
+// Why this matters: SQLite does not guarantee an ordering for tied ORDER BY
+// keys, and score/rank ties shuffle rows between runs. Non-deterministic output
+// breaks prompt-cache hits and makes the same query answer differently on
+// identical input. The ORDER BY clauses add an explicit `id` tiebreak, and the
+// JS sort ties on (final, qname, id) — so repeated calls are byte-identical.
+
+async function tieStore() {
+  const { Store } = await import('../src/core/store.js');
+  const store = await Store.memory({ forceNoFts: true });
+  const fileId = store.upsertFile({
+    path: 'src/t.js', lang: 'javascript', pack: 'javascript',
+    hash: 'h', mtime: 1, size: 1, loc: 40, tok: 200, parsed: 1,
+  });
+  // All rank 0 (untouched by PageRank) and all matched identically by a prefix
+  // query, so every hit has the SAME final score — a genuine tie. Insertion is
+  // NOT alphabetical, so a sort that ignored the tiebreak could return a
+  // different order than the documented (final, qname, id) ordering.
+  const names = ['zeta', 'alpha', 'mid', 'beta', 'gamma', 'delta'];
+  names.forEach((n, i) => {
+    store.insertNode({
+      fileId, kind: 'function', name: `compute_${n}`,
+      qname: `src/t.js::compute_${n}`,
+      startLine: 1 + i * 3, endLine: 3 + i * 3, startByte: i * 30, endByte: i * 30 + 20,
+      signature: `compute_${n}()`, doc: 'a tied candidate',
+    });
+  });
+  return store;
+}
+
+test('the same query on the same store returns byte-identical output', async () => {
+  const store = await tieStore();
+  try {
+    const render = () => {
+      const hits = search(store, 'compute', { limit: 50 });
+      return { text: renderHits(hits).join('\n'), ids: hits.map((h) => h.node.id) };
+    };
+    const a = render();
+    const b = render();
+    assert.deepEqual(a.ids, b.ids, 'the id sequence must be identical across runs');
+    assert.equal(a.text, b.text, 'the rendered string must be byte-identical across runs');
+  } finally { store.close(); }
+});
+
+test('tied scores resolve to a stable, documented order (not insertion order)', async () => {
+  const store = await tieStore();
+  try {
+    const hits = search(store, 'compute', { limit: 50 });
+    // A real tie must be present, else the test guards nothing.
+    assert.ok(hits.length >= 2, 'expected multiple tied candidates');
+    const finals = new Set(hits.map((h) => h.final));
+    assert.equal(finals.size, 1, `expected one tied score, got ${[...finals]}`);
+
+    // Order must equal the documented tiebreak: final desc, then qname asc.
+    const expected = [...hits].sort(
+      (x, y) => y.final - x.final || x.node.qname.localeCompare(y.node.qname) || x.node.id - y.node.id
+    );
+    assert.deepEqual(hits.map((h) => h.node.qname), expected.map((h) => h.node.qname),
+      'tied rows must follow the deterministic (final, qname, id) order');
+  } finally { store.close(); }
+});
+
+test('suggestSymbols is deterministic and never fabricates (real index only)', async () => {
+  const store = await tieStore();
+  try {
+    // Same query twice → identical suggestion list (byte-stable ordering).
+    const a = suggestSymbols(store, 'compute_alpha', { limit: 5 }).map((s) => s.name);
+    const b = suggestSymbols(store, 'compute_alpha', { limit: 5 }).map((s) => s.name);
+    assert.deepEqual(a, b, 'suggestions must be byte-stable across runs');
+    assert.ok(a.includes('compute_alpha'), 'the exact near-miss is suggested from the real index');
+
+    // A query sharing no trigrams with any name → no suggestion (no fabrication).
+    assert.deepEqual(suggestSymbols(store, 'zzzzqqqq', { limit: 5 }), [],
+      'nothing above the similarity floor must return an empty list, not invented names');
+  } finally { store.close(); }
+});
+
 // ------------------------------------------------- search without FTS5
 
 /**
@@ -210,6 +288,97 @@ test('operator characters do not throw without FTS5', async () => {
       assert.doesNotThrow(() => search(store, q), `query '${q}' should degrade, not throw`);
     }
   } finally { store.close(); }
+});
+
+// ------------------------------------------------- FTS5 / LIKE parity
+//
+// Two text-retrieval implementations exist because Node's bundled SQLite omits
+// FTS5 in many builds, and the caller CANNOT tell which ran (the comment in
+// search.js says so). That makes the candidate SET they feed into the scorer a
+// real correctness surface: if one path matches a symbol the other does not,
+// the same query returns different answers depending on the Node binary — and
+// no test would notice. These tests force FTS5 ON and OFF over identical seed
+// data and assert the top results OVERLAP.
+
+/** Seed identical nodes into a store, with FTS5 on or off as requested. */
+async function seedStore({ forceNoFts }) {
+  const { Store } = await import('../src/core/store.js');
+  const store = await Store.memory({ forceNoFts });
+  const fileId = store.upsertFile({
+    path: 'src/users.js', lang: 'javascript', pack: 'javascript',
+    hash: 'h', mtime: 1, size: 1, loc: 40, tok: 200, parsed: 1,
+  });
+  // A hyphenated name is the crux: the FTS5 path strips `-` and searches the
+  // `get`/`user` fragments; the LIKE path historically ALSO matched the raw
+  // `%get-user%` substring, which FTS5 can never produce — a divergence.
+  store.insertNode({
+    fileId, kind: 'function', name: 'get-user', qname: 'src/users.js::get-user',
+    startLine: 1, endLine: 4, startByte: 0, endByte: 60,
+    signature: 'get-user(id)', doc: 'Fetches a user record.',
+  });
+  store.insertNode({
+    fileId, kind: 'function', name: 'getUserRecord', qname: 'src/users.js::getUserRecord',
+    startLine: 6, endLine: 9, startByte: 70, endByte: 140,
+    signature: 'getUserRecord(id)', doc: 'Loads a user record.',
+  });
+  store.insertNode({
+    fileId, kind: 'function', name: 'saveUser', qname: 'src/users.js::saveUser',
+    startLine: 11, endLine: 14, startByte: 150, endByte: 220,
+    signature: 'saveUser(u)', doc: 'Persists a user record.',
+  });
+  return store;
+}
+
+test('FTS5 and LIKE paths return overlapping results for an operator query', async () => {
+  // The parity guard. A query with an operator char (hyphen) must surface the
+  // same set of candidate symbols on both builds, because nothing tells the
+  // caller which build it is on.
+  const fts = await seedStore({ forceNoFts: false });
+  const like = await seedStore({ forceNoFts: true });
+  try {
+    const ftsNames = search(fts, 'get-user', { limit: 10 }).map((h) => h.node.name);
+    const likeNames = search(like, 'get-user', { limit: 10 }).map((h) => h.node.name);
+
+    const overlap = ftsNames.filter((n) => likeNames.includes(n));
+    assert.ok(
+      overlap.length >= 2,
+      `top results must overlap between FTS5=[${ftsNames}] and LIKE=[${likeNames}]`
+    );
+    // Both paths must find the hyphenated symbol itself — the whole point of
+    // aligning term construction (see buildTerms in search.js).
+    assert.ok(ftsNames.includes('get-user'), 'FTS5 path must find get-user');
+    assert.ok(likeNames.includes('get-user'), 'LIKE path must find get-user');
+  } finally {
+    fts.close();
+    like.close();
+  }
+});
+
+// ------------------------------------------------- loud filter guidance
+//
+// A --lang / --path / --kind typo, an out-of-enum kind, or a language whose
+// pack never loaded empties the result set, and an empty array reads exactly
+// like "no matches exist" — nudging the agent to stop looking (silent
+// truncation of the answer space, which AGENTS.md forbids). search() must say
+// the unfiltered set was non-empty and the filter emptied it.
+
+test('a filter that excludes everything emits guidance, not a silent empty', opts, async () => {
+  const fx = await buildFixture(REPO);
+  try {
+    // 'user' matches several TS symbols; filtering to a language not present in
+    // the repo excludes all of them.
+    const hits = search(fx.store, 'user', { lang: 'python' });
+    assert.equal(hits.length, 0, 'the filter legitimately excludes every match');
+    assert.ok(hits.filterNote, 'a filter that emptied a non-empty set must report it');
+    assert.match(hits.filterNote, /matched/, 'the guidance states symbols matched before the filter');
+    assert.match(hits.filterNote, /--lang/, 'it names the filter that caused the empty result');
+    assert.match(hits.filterNote, /\d+ symbol/, 'it states the count so the agent questions the filter');
+
+    // No guidance when the filter legitimately matches — must stay silent.
+    const ok = search(fx.store, 'user', { lang: 'typescript' });
+    assert.ok(ok.length > 0);
+    assert.ok(!ok.filterNote, 'a filter that keeps results adds no guidance line');
+  } finally { fx.cleanup(); }
 });
 
 test('FTS5 availability is recorded so doctor can report it', async () => {

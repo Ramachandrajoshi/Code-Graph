@@ -34,16 +34,19 @@ export async function run(args) {
     `[cgraph] serving ${ctx.config.root} (${ctx.store.stats().nodes} symbols)\n`
   );
 
-  const shutdown = () => {
+  const cleanup = () => {
     try { ctx.refresher?.dispose(); } catch { /* never loaded */ }
     try { ctx.store.close(); } catch { /* already closed */ }
+  };
+  const shutdown = () => {
+    cleanup();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
   await ctx.server.start();
-  shutdown();
+  cleanup();
 }
 
 function help() {

@@ -17,7 +17,8 @@ import { toolDefinitions } from './tools.js';
 import { Store } from '../core/store.js';
 import { loadConfig } from '../core/config.js';
 import { outlineFile, outlineDir, findSymbol, formatConfidence } from '../core/retrieve.js';
-import { search, renderHits, suggestSymbols, formatSuggestions, indexIsEmpty } from '../core/search.js';
+import { displayName, formatSuggestions } from '../core/search.js';
+import { find } from '../core/find.js';
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../core/graph.js';
 import { degree } from '../core/rank.js';
 import { UsageLedger, fitToBudget } from '../core/tokens.js';
@@ -33,9 +34,9 @@ import { isTrusted } from '../core/trust.js';
  * every session, whether or not a tool is ever called.
  */
 const INSTRUCTIONS =
-  'Code graph of this repository. To locate a symbol use `find`, not grep. To see what a file ' +
-  'or directory contains, or what calls / is called by / is affected by a symbol, use `map`, ' +
-  'not ls, glob or reading the file. Both return exact file:line locations.';
+  'Code graph of this repo. To locate code use `find`, not grep: a name, what the code ' +
+  'does, or "quoted text". To see what a file or directory contains, or what calls or is ' +
+  'affected by a symbol, use `map`, not ls or reading files. Both give line ranges.';
 
 export async function createServer({ root, version }) {
   const config = loadConfig(root ?? process.cwd(), root ? { root } : {});
@@ -61,7 +62,7 @@ export async function createServer({ root, version }) {
 
         switch (name) {
           case 'map':    return toolMap(store, config, withCeiling(args, config), ledger);
-          case 'find':   return toolFind(store, config, withCeiling(args, config), ledger);
+          case 'find':   return await toolFind(store, config, withCeiling(args, config), ledger);
           case 'similar': return await toolSimilar(store, config, args);
           default:
             return errorResult(`Unknown tool '${name}'.`);
@@ -95,6 +96,7 @@ class Refresher {
     this.config = config;
     this.registry = null;
     this.lastCheck = 0;
+    this.lastScanMs = 0;
     this.inFlight = null;
   }
 
@@ -105,11 +107,19 @@ class Refresher {
     // same files into the same tables.
     if (this.inFlight) return this.inFlight;
 
-    const throttle = this.config.autoRefresh?.throttleMs ?? 3000;
+    // The scan stats every file, so its cost grows with the repository: 0.2s
+    // at four thousand files, several seconds at a hundred thousand. A fixed
+    // three-second throttle would make every spaced-out query on a large repo
+    // wait for a scan longer than the query itself. Spacing scans at least
+    // five scan-lengths apart caps the overhead near a fifth of wall time,
+    // and changes nothing for a repository that scans quickly.
+    const throttle = Math.max(this.config.autoRefresh?.throttleMs ?? 3000, this.lastScanMs * 5);
     if (Date.now() - this.lastCheck < throttle) return null;
 
+    const started = Date.now();
     this.inFlight = this._run().finally(() => {
       this.lastCheck = Date.now();
+      this.lastScanMs = this.lastCheck - started;
       this.inFlight = null;
     });
     return this.inFlight;
@@ -189,29 +199,16 @@ function toolMap(store, config, args, ledger) {
   return textResult(result.lines.join('\n') + staleness(store));
 }
 
-function toolFind(store, config, args, ledger) {
-  const hits = search(store, args.query, {
-    kind: args.kind ?? null,
-    lang: args.lang ?? null,
+async function toolFind(store, config, args, ledger) {
+  const answer = await find(store, config, {
+    ...args,
     path: args.path ? normalizePath(args.path) : null,
-    limit: args.limit ?? 20,
   });
 
-  if (!hits.length) {
-    // A filter that emptied a non-empty candidate set is NOT the same as "no
-    // matches exist" (truncate-loudly). search() attaches filterNote for that
-    // case; surface it verbatim so the agent questions the filter instead of
-    // concluding the symbol is absent.
-    if (hits.filterNote) {
-      return textResult(hits.filterNote);
-    }
-    return textResult(formatSuggestions(store, args.query) + staleness(store));
-  }
-
-  const fitted = fitToBudget(renderHits(hits), budgetOf(args));
+  const fitted = fitToBudget(answer.lines, budgetOf(args));
   // No source figure: a search spans many files, and there is no honest way
   // to say how much of them another workflow would have read.
-  ledger.record('find', fitted.tokens);
+  if (answer.mode !== 'none') ledger.record('find', fitted.tokens);
 
   let text = fitted.lines.join('\n');
   if (fitted.dropped) text += `\n... ${fitted.dropped} more lines (raise budget)`;
@@ -234,18 +231,28 @@ function toolGraph(store, config, args, ledger) {
   const node = matches[0];
   const lines = [];
 
+  // Several symbols share this name and one had to be chosen. Answering for
+  // the top-ranked one without saying so reads as "this is the only one" —
+  // and the agent then reasons about callers of the wrong function.
+  const others = matches.slice(1).filter((m) => m.id !== node.id);
+  const ambiguity = others.length
+    ? `(${others.length === 2 ? 'at least ' : ''}${others.length} other symbol${others.length > 1 ? 's' : ''} matching '${args.symbol}': ` +
+      others.map((m) => `${displayName(m)} ${m.path}:${m.start_line}`).join(', ') +
+      ' — pass the qualified name to choose)'
+    : null;
+
   if (direction === 'callers') {
     const rows = callers(store, node.id, { limit: 60, minConfidence: args.exact ? 'EXACT' : null });
     const d = degree(store, node.id);
-    lines.push(`${node.qname}  ${node.path}:${node.start_line}`, `callers: ${d.callers}  callees: ${d.callees}`, '');
+    lines.push(`${displayName(node)}  ${node.path}:${node.start_line}`, `callers: ${d.callers}  callees: ${d.callees}`, '');
     if (!rows.length) lines.push('(no callers — entry point, dead code, or called dynamically)');
     for (const r of rows) {
-      lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
+      lines.push(`${formatConfidence(r.confidence)} ${displayName(r)}  ${r.path}:${r.line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
     }
   } else if (direction === 'callees') {
     const { internal, external } = callees(store, node.id, { limit: 60 });
     lines.push(`${node.qname} calls:`, '');
-    for (const r of internal) lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}`);
+    for (const r of internal) lines.push(`${formatConfidence(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}`);
     if (external.length) {
       lines.push('', 'external:');
       for (const r of external) lines.push(`  ${r.package}${r.symbol ? '.' + r.symbol : ''} (${r.ecosystem})`);
@@ -263,7 +270,7 @@ function toolGraph(store, config, args, ledger) {
     let d = 0;
     for (const r of result.nodes) {
       if (r.distance !== d) { d = r.distance; lines.push(`${d === 1 ? 'direct' : d + ' hops'}:`); }
-      lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}`);
+      lines.push(`${formatConfidence(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}`);
     }
     if (result.truncated) lines.push('', '(truncated — this symbol is central)');
   } else if (direction === 'path') {
@@ -276,23 +283,23 @@ function toolGraph(store, config, args, ledger) {
     } else {
       const rows = hydrate(store, ids);
       lines.push(`${rows.length - 1} hops:`, '');
-      rows.forEach((r, i) => lines.push(`  ${i === 0 ? ' ' : '->'} ${r.qname}  ${r.path}:${r.start_line}`));
+      rows.forEach((r, i) => lines.push(`  ${i === 0 ? ' ' : '->'} ${displayName(r)}  ${r.path}:${r.start_line}`));
     }
   } else if (direction === 'explore') {
     const d = degree(store, node.id);
-    lines.push(`${node.qname}  ${node.path}:${node.start_line}-${node.end_line}`, '');
+    lines.push(`${displayName(node)}  ${node.path}:${node.start_line}-${node.end_line}`, '');
 
     const callerRows = callers(store, node.id, { limit: args.limit ?? 30, minConfidence: args.exact ? 'EXACT' : null });
     lines.push(`called from (bottom-up, ${d.callers}):`);
     if (!callerRows.length) lines.push('  (no callers — entry point, dead code, or called dynamically)');
     for (const r of callerRows) {
-      lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
+      lines.push(`${formatConfidence(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}-${r.end_line}${r.sites > 1 ? ` (${r.sites}x)` : ''}`);
     }
 
     const { internal, external } = callees(store, node.id, { limit: args.limit ?? 30 });
     lines.push('', `calls (top-down, ${d.callees}):`);
     if (!internal.length && !external.length) lines.push('  (calls nothing this index knows about)');
-    for (const r of internal) lines.push(`${formatConfidence(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}`);
+    for (const r of internal) lines.push(`${formatConfidence(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}-${r.end_line}`);
     if (external.length) {
       lines.push('  external:');
       for (const r of external) lines.push(`    ${r.package}${r.symbol ? '.' + r.symbol : ''} (${r.ecosystem})`);
@@ -300,6 +307,8 @@ function toolGraph(store, config, args, ledger) {
   } else {
     return errorResult(`Unknown direction '${direction}'. Use callers, callees, importers, impact, path, or explore.`);
   }
+
+  if (ambiguity) lines.push('', ambiguity);
 
   const fitted = fitToBudget(lines, budgetOf(args));
   ledger.record('graph', fitted.tokens, 0);
@@ -322,7 +331,7 @@ async function toolSimilar(store, config, args) {
   const hits = await semanticSearch(store, config, args.query, { limit: args.limit ?? 10 });
 
   const lines = hits.map(
-    (h, i) => `${String(i + 1).padStart(2)} ${h.qname}  ${h.path}:${h.start_line}  ${h.score.toFixed(3)}`
+    (h, i) => `${String(i + 1).padStart(2)} ${displayName(h)}  ${h.path}:${h.start_line}  ${h.score.toFixed(3)}`
   );
   return textResult(lines.join('\n') || 'no matches');
 }

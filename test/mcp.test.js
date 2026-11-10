@@ -534,8 +534,8 @@ test('map marks an inferred edge with `!` via the shared formatter', opts, async
     // The marker the helper produces must appear at the start of the caller row.
     const marker = formatConfidence('INFERRED');
     assert.equal(marker, '!', 'helper defines the inferred marker');
-    // qname is fully-qualified, so the marker prefixes `src/b.js::caller`.
-    assert.ok(text.includes(`${marker} src/b.js::caller`),
+    // The marker prefixes the caller's name; its file is on the same line, once.
+    assert.ok(text.includes(`${marker} caller  src/b.js`),
       `MCP must mark the inferred caller with the shared marker:\n${text}`);
   } finally { fx.cleanup(); }
 });
@@ -677,7 +677,7 @@ test('map callees lists internal calls (direction=callees, internal rows)', opts
     const res = await toolCall(fx.root, 'map', { symbol: 'handleLogin', direction: 'callees' });
     const text = res.content[0].text;
     assert.match(text, /handleLogin calls:/);
-    assert.ok(text.includes(' src/db.js::findUser'), 'EXACT callee renders with a space marker, no !');
+    assert.ok(text.includes('  findUser  src/db.js'), 'EXACT callee renders with a space marker, no !');
     assert.ok(!res.isError);
   } finally { fx.cleanup(); }
 });
@@ -743,7 +743,7 @@ test('map path renders the hop chain (direction=path, found branch)', opts, asyn
   try {
     const text = (await toolCall(fx.root, 'map', { symbol: 'handleLogin', direction: 'path', to: 'findUser' })).content[0].text;
     assert.match(text, /^1 hops:$/m);
-    assert.match(text, /-> src\/db\.js::findUser/);
+    assert.match(text, /-> findUser  src\/db\.js/);
   } finally { fx.cleanup(); }
 });
 
@@ -799,7 +799,7 @@ test('map explore annotates multi-site callers with (Nx) (explore sites>1 branch
   const fx = await buildFixture(TWICE);
   try {
     const text = (await toolCall(fx.root, 'map', { symbol: 'findUser', direction: 'explore' })).content[0].text;
-    assert.match(text, /src\/app\.js::handleLogin\s+src\/app\.js:2-2 \(2x\)/);
+    assert.match(text, / handleLogin\s+src\/app\.js:2-2 \(2x\)/);
   } finally { fx.cleanup(); }
 });
 
@@ -820,7 +820,7 @@ test('map callers exact=true keeps EXACT edges (callers minConfidence=EXACT bran
   const fx = await buildFixture(REPO);
   try {
     const text = (await toolCall(fx.root, 'map', { symbol: 'findUser', direction: 'callers', exact: true })).content[0].text;
-    assert.ok(text.includes(' src/app.js::handleLogin'), 'EXACT caller survives exact=true');
+    assert.ok(text.includes('  handleLogin  src/app.js'), 'EXACT caller survives exact=true');
   } finally { fx.cleanup(); }
 });
 
@@ -829,7 +829,7 @@ test('map callers annotates multi-site callers with (Nx) (callers sites>1 branch
   const fx = await buildFixture(TWICE);
   try {
     const text = (await toolCall(fx.root, 'map', { symbol: 'findUser', direction: 'callers' })).content[0].text;
-    assert.match(text, /src\/app\.js::handleLogin\s+src\/app\.js:2 \(2x\)/);
+    assert.match(text, / handleLogin\s+src\/app\.js:2 \(2x\)/);
   } finally { fx.cleanup(); }
 });
 

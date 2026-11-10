@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import builtins from './builtins.js';
+import { linesAbove } from '../../core/text.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,12 +42,9 @@ export default {
    * index with implementation asides rather than API documentation.
    */
   docComment(def, source) {
-    const lines = source.slice(0, def.startByte).split('\n');
-    lines.pop();
-
     const collected = [];
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
+    for (const raw of linesAbove(source, def.startByte)) {
+      const line = raw.trim();
       if (line.startsWith('#[')) continue;              // attributes sit between doc and item
       if (!line.startsWith('///') && !line.startsWith('//!')) break;
       collected.unshift(line.replace(/^\/\/[/!]\s?/, ''));

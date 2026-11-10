@@ -41,6 +41,13 @@ async function openDatabase(file) {
   }
 }
 
+/**
+ * Columns of the full-text index, in bm25 weight order (see core/search.js).
+ * `body` holds the words used inside a function, so code can be found by what
+ * it does and not only by what it is called.
+ */
+const FTS_COLUMNS = ['name', 'parts', 'qname', 'signature', 'doc', 'body'];
+
 export class Store {
   constructor(db, file) {
     this.db = db;
@@ -62,6 +69,7 @@ export class Store {
     store._configure();
     store.migrate();
     store.ensureSearchIndex();
+    store.needsFullReindex = store.getMeta('needs_full_reindex') === '1';
     return store;
   }
 
@@ -87,6 +95,26 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec('PRAGMA temp_store = MEMORY');
     this.db.exec('PRAGMA cache_size = -64000'); // 64 MB
+  }
+
+  /**
+   * Record that the index must be rebuilt from source before it is complete.
+   *
+   * Written to the database, not just held on this object. Whatever opens an
+   * index first after an upgrade discovers the need — and that is as likely to
+   * be `cgraph find` or the MCP server answering a query as it is the
+   * indexer. A flag kept only in memory was dropped when that process exited,
+   * and the rebuild it called for never happened.
+   */
+  requireFullReindex() {
+    this.needsFullReindex = true;
+    this.setMeta('needs_full_reindex', '1');
+  }
+
+  /** The rebuild has been done. */
+  clearFullReindex() {
+    this.needsFullReindex = false;
+    if (this.getMeta('needs_full_reindex') === '1') this.setMeta('needs_full_reindex', '0');
   }
 
   /** Prepared-statement cache. Every hot path goes through here. */
@@ -157,7 +185,7 @@ export class Store {
            ON CONFLICT(key) DO UPDATE SET value = excluded.value`
         );
         this.db.exec('COMMIT');
-        if (m.forceReindex) this.needsFullReindex = true;
+        if (m.forceReindex) this.requireFullReindex();
       } catch (err) {
         this.db.exec('ROLLBACK');
         throw new Error(`Migration ${m.version} (${m.name}) failed: ${err.message}`);
@@ -195,9 +223,20 @@ export class Store {
       return false;
     }
 
+    // The column set has grown since the first release. FTS5 cannot add a
+    // column in place, so an index built with the older shape is dropped and
+    // rebuilt: names and docs are backfilled below so search keeps working
+    // straight away, and a full re-index is requested to fill in the columns
+    // that can only come from re-reading the source.
+    const columns = this._ftsColumns();
+    if (columns.length && !FTS_COLUMNS.every((c) => columns.includes(c))) {
+      this.db.exec('DROP TABLE IF EXISTS symbols_vocab; DROP TABLE IF EXISTS symbols_fts; DROP TABLE IF EXISTS fts_map;');
+      this.requireFullReindex();
+    }
+
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
-        name, parts, qname, signature, doc,
+        ${FTS_COLUMNS.join(', ')},
         content='',
         contentless_delete=1,
         tokenize='unicode61 remove_diacritics 2'
@@ -207,6 +246,7 @@ export class Store {
         node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_fts_map_node ON fts_map(node_id);
+      CREATE VIRTUAL TABLE IF NOT EXISTS symbols_vocab USING fts5vocab(symbols_fts, 'row');
     `);
     this.setMeta('fts5', '1');
 
@@ -218,6 +258,24 @@ export class Store {
     if (nodes > 0 && indexed === 0) this._backfillFts();
 
     return true;
+  }
+
+  _ftsColumns() {
+    try {
+      return this.db.prepare('PRAGMA table_info(symbols_fts)').all().map((c) => c.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * How many symbols the full-text index holds. Cached, because the ranker
+   * asks on every search and counting is a scan.
+   */
+  ftsSize() {
+    if (!this.hasFts5) return 0;
+    this._ftsSize ??= this.get('SELECT COUNT(*) n FROM fts_map')?.n ?? 0;
+    return this._ftsSize;
   }
 
   _probeFts5() {
@@ -294,7 +352,9 @@ export class Store {
   }
 
   upsertFile(f) {
-    this.run(
+    // RETURNING saves the SELECT that used to follow every upsert just to learn
+    // the row id — one round trip per file instead of two.
+    return this.get(
       `INSERT INTO files(path, lang, pack, hash, mtime, size, loc, tok, parsed, skip_reason, subproject, indexed_at)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
@@ -302,12 +362,12 @@ export class Store {
          mtime = excluded.mtime, size = excluded.size, loc = excluded.loc,
          tok = excluded.tok, parsed = excluded.parsed,
          skip_reason = excluded.skip_reason, subproject = excluded.subproject,
-         indexed_at = excluded.indexed_at`,
+         indexed_at = excluded.indexed_at
+       RETURNING id`,
       f.path, f.lang ?? null, f.pack ?? null, f.hash, f.mtime, f.size,
       f.loc ?? 0, f.tok ?? 0, f.parsed ? 1 : 0, f.skipReason ?? null,
       f.subproject ?? null, f.indexedAt ?? Date.now()
-    );
-    return this.getFileByPath(f.path).id;
+    ).id;
   }
 
   /**
@@ -347,16 +407,18 @@ export class Store {
     this.run('DELETE FROM imports WHERE file_id = ?', fileId);
     this.run('DELETE FROM unresolved WHERE file_id = ?', fileId);
     this.run('DELETE FROM refs WHERE file_id = ?', fileId);
-    this.run('DELETE FROM nodes WHERE file_id = ?', fileId);
-
-    // Edges *into* this file's nodes are owned by other files and survive the
-    // cascade above only by accident of their own file_id. They point at node
+    // Edges *into* this file's nodes are owned by other files, so the deletes
+    // above (keyed on this file's id) do not reach them. They point at node
     // ids that are about to disappear, so they go too — otherwise a re-indexed
-    // file leaves dangling callers that resolve to nothing.
+    // file leaves dangling callers that resolve to nothing. This has to run
+    // while the nodes still exist: it used to come after the node delete,
+    // where its subquery was always empty and the statement did nothing.
     this.run(
       'DELETE FROM edges WHERE dst_id IN (SELECT id FROM nodes WHERE file_id = ?)',
       fileId
     );
+    this.run('DELETE FROM nodes WHERE file_id = ?', fileId);
+    this._ftsSize = null;
   }
 
   removeFile(fileId) {
@@ -374,7 +436,9 @@ export class Store {
    * looks like "the graph is fine but find() returns nothing".
    */
   insertNode(n) {
-    this.run(
+    // The driver already reports the new row id; asking SQLite for
+    // last_insert_rowid() separately doubled the statements per symbol.
+    const id = Number(this.run(
       `INSERT INTO nodes(file_id, parent_id, kind, name, qname, start_line, end_line,
                          start_byte, end_byte, signature, doc, visibility, is_exported, hash, tok)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -382,8 +446,7 @@ export class Store {
       n.startLine, n.endLine, n.startByte, n.endByte,
       n.signature ?? null, n.doc ?? null, n.visibility ?? null,
       n.isExported ? 1 : 0, n.hash ?? null, n.tok ?? 0
-    );
-    const id = this.get('SELECT last_insert_rowid() AS id').id;
+    ).lastInsertRowid);
     this.indexNodeForSearch(id, n);
     return id;
   }
@@ -397,11 +460,11 @@ export class Store {
 
     if (!this.hasFts5) return;
 
-    this.run(
-      `INSERT INTO symbols_fts(name, parts, qname, signature, doc) VALUES(?, ?, ?, ?, ?)`,
-      n.name, identifierParts(n.name), n.qname, n.signature ?? '', n.doc ?? ''
-    );
-    const rowid = this.get('SELECT last_insert_rowid() AS id').id;
+    this._ftsSize = null;
+    const rowid = Number(this.run(
+      `INSERT INTO symbols_fts(name, parts, qname, signature, doc, body) VALUES(?, ?, ?, ?, ?, ?)`,
+      n.name, identifierParts(n.name), n.qname, n.signature ?? '', n.doc ?? '', n.body ?? ''
+    ).lastInsertRowid);
     this.run('INSERT INTO fts_map(rowid, node_id) VALUES(?, ?)', rowid, nodeId);
   }
 

@@ -30,10 +30,17 @@ export const EXACT = 'EXACT';
 export const INFERRED = 'INFERRED';
 
 export class Resolver {
-  constructor({ store, config, registry }) {
+  /**
+   * @param {object} opts
+   * @param {(done: number, total: number) => void} [opts.onProgress] called as
+   *   references are resolved. The pass is synchronous and takes seconds on a
+   *   large graph, so without this a caller has nothing to show for it.
+   */
+  constructor({ store, config, registry, onProgress = null }) {
     this.store = store;
     this.config = config;
     this.registry = registry;
+    this.onProgress = onProgress;
   }
 
   /**
@@ -224,7 +231,9 @@ export class Resolver {
       'UPDATE externals SET use_count = use_count + 1 WHERE id = ?'
     );
 
+    let done = 0;
     for (const ref of refs) {
+      if (this.onProgress && (done++ & 4095) === 0) this.onProgress(done - 1, refs.length);
       let resolved = this._resolveOne(ref, symbols, bindings);
 
       // A reference into the language runtime is not a resolution failure.

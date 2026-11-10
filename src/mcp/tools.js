@@ -83,9 +83,12 @@ export function toolDefinitions({ embeddingsEnabled = false } = {}) {
     {
       name: 'find',
       description:
-        'Search symbols by name, signature, or doc text. Use instead of grep. ' +
-        'Matches camelCase parts ("login" finds "handleLogin") and substrings, ranked ' +
-        'by importance. Returns definitions with exact locations, not line hits.',
+        'Search code. Use instead of grep. Takes a name ("handleLogin", or part of ' +
+        'one), or a few words describing what the code does ("retry failed upload") — ' +
+        'names, signatures, docs and function bodies are all searched. Returns ranked ' +
+        'definitions as path:start-end, the exact lines to read. Put literal text in ' +
+        'quotes ("connection refused") to get every line containing it, grouped under ' +
+        'the symbol each is in.',
       annotations,
       inputSchema: {
         type: 'object',

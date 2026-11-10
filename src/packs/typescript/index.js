@@ -12,8 +12,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tryCandidates, normalizeRelative } from '../../core/resolve.js';
 import builtins from './builtins.js';
+import { trimEndIndex } from '../../core/text.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+/** Longest run of modifier keywords worth looking back over (`export default async`). */
+const MODIFIER_WINDOW = 64;
 
 /**
  * Candidate suffixes for an extensionless specifier, in Node's own precedence
@@ -94,21 +98,24 @@ export default {
 
   /** JSDoc immediately preceding the definition, markers stripped. */
   docComment(def, source) {
-    const before = source.slice(0, def.startByte);
     // The definition node starts at `function`/`class`, so any modifiers written
     // before it sit between the JSDoc and the node. Skipping them is what keeps
     // `export function` from falling through to the generic extractor, which
     // does not understand doc tags.
-    const trimmed = before
-      .replace(/\s*$/, '')
-      .replace(/(\s|^)(export|default|declare|abstract|async|static|public|private|protected|readonly)+$/g, '')
-      .replace(/\s*$/, '');
-    if (!trimmed.endsWith('*/')) return null;
+    //
+    // Only a short tail is examined. Running these patterns over the whole
+    // prefix made the hook quadratic in file size — it was 40% of total index
+    // time on a large repo (see core/text.js).
+    let end = trimEndIndex(source, def.startByte);
+    const tail = source.slice(Math.max(0, end - MODIFIER_WINDOW), end);
+    const kept = tail.replace(/(\s|^)(export|default|declare|abstract|async|static|public|private|protected|readonly)+$/, '');
+    end = trimEndIndex(source, end - (tail.length - kept.length));
+    if (!source.endsWith('*/', end)) return null;
 
-    const open = trimmed.lastIndexOf('/**');
+    const open = source.lastIndexOf('/**', end - 3);
     if (open === -1) return null;
 
-    const block = trimmed.slice(open + 3, trimmed.length - 2);
+    const block = source.slice(open + 3, end - 2);
     const text = block
       .split('\n')
       .map((l) => l.replace(/^\s*\*\s?/, '').trim())

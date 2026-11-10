@@ -8,23 +8,53 @@
  * other 40,000. That is the difference between a sub-second update and a slow
  * one, and it is what makes watch mode viable at all.
  *
- * Measured on llama.cpp (3,245 files, 150 MB, 727k LOC):
- *   full index      8.5s
- *   no-op update    0.8s
- *   one file edited 0.9s
+ * The run has four phases, and the split is deliberate:
  *
- * Parsing is single-threaded. A worker pool was planned, but 8.5s for a full
- * index of a large C++ monorepo is not the bottleneck any user will notice, and
- * the pool would add wasm-per-worker memory cost and a serialization boundary
- * for every extraction result. `parseBatch` is already async and batched, so a
- * pool can be dropped in behind it without touching this file if a repo ever
- * makes it worth doing.
+ *   scan     stat every file, read none. Cheap, and it is what gives the next
+ *            phase a total — without it progress can only count upwards, which
+ *            on a large repo reads as "no idea how long this will take".
+ *   index    read, hash, parse, extract, persist.
+ *   resolve  refs -> edges, over the complete symbol table.
+ *   rank     PageRank over the edges.
+ *
+ * Parsing is the only part that parallelises: SQLite has one writer, and the
+ * walk is bound by the disk. So on a large run the registry is asked for a
+ * pool of parser threads, this thread keeps reading files and writing rows,
+ * and batches are handed out as fast as they can be read. Results are written
+ * in the order the batches were dispatched, not the order they finished, so
+ * node ids — and with them every tie-break in resolution — come out the same
+ * whether a run used one thread or sixteen.
+ *
+ * A small run (an incremental update, the MCP server's freshness check) never
+ * starts the pool: spinning up threads to parse three files costs more than
+ * parsing them.
  */
 
-import { walk } from './walker.js';
+import os from 'node:os';
+import { readFile } from 'node:fs/promises';
+import { walk, classifyFile } from './walker.js';
 import { estimate } from './tokens.js';
 import { Resolver } from './resolve.js';
 import { computeRanks } from './rank.js';
+
+/** A batch is flushed at whichever of these it reaches first. */
+const BATCH_FILES = 64;
+const BATCH_CHARS = 1 << 20;
+
+/**
+ * How many files are being read ahead of the one being processed.
+ *
+ * Opening a file is the slow part of reading it — on Windows, where every open
+ * is also a virus scan, it was a third of the main thread's time — and it is
+ * time spent waiting, not computing. Issuing the reads early lets them overlap.
+ */
+const READ_AHEAD = 32;
+
+/** Unparsed files written per transaction when no parsed batch is due. */
+const STUB_BATCH = 512;
+
+/** Below this many files to read, parsing stays on this thread. */
+const POOL_THRESHOLD = 300;
 
 export class Indexer {
   /**
@@ -33,12 +63,17 @@ export class Indexer {
    * @param {object} opts.config
    * @param {object} [opts.registry] language pack registry (absent in P0/tests)
    * @param {object} [opts.progress]
+   * @param {number} [opts.poolThreshold] files to read before parser threads
+   *   are worth starting. Overridable so a test can exercise the pool on a
+   *   five-file repo.
    */
-  constructor({ store, config, registry = null, progress = null }) {
+  constructor({ store, config, registry = null, progress = null, poolThreshold = POOL_THRESHOLD }) {
     this.store = store;
     this.config = config;
     this.registry = registry;
     this.progress = progress;
+    this.poolThreshold = poolThreshold;
+    this._stubs = [];
   }
 
   /**
@@ -64,6 +99,10 @@ export class Indexer {
       bytes: 0, tokens: 0,
       byLang: new Map(), bySkip: new Map(),
       files: [],
+      // Where the time went, in ms, and how many threads parsed. Reported so a
+      // slow index can be diagnosed from its own output.
+      phases: { scan: 0, index: 0, resolve: 0, rank: 0 },
+      workers: 1,
     };
 
     // Everything currently in the index. Whatever the walk doesn't visit has
@@ -80,8 +119,6 @@ export class Indexer {
     this._packsUnchanged =
       !dryRun && this.store?.getMeta('packs_fingerprint') === fingerprint;
 
-    const pending = [];
-
     // Stat-level fast path. A file whose size and mtime match the index is not
     // read at all — no I/O beyond the stat the walk already performs. This is
     // what makes a freshness check cheap enough to run on every query: measured
@@ -96,77 +133,186 @@ export class Indexer {
       return this._isUnchanged(prior, { hash: prior.hash });
     };
 
-    for (const file of walk(this.config.root, this.config, { isUnchanged: statFilter })) {
-      stats.seen++;
-      seen.add(file.rel);
-      stats.bytes += file.size;
-      this.progress?.tick(1, file.rel);
+    // 1. Scan ----------------------------------------------------------------
+    // Stat only. Knowing the whole file set before reading any of it is what
+    // lets the next phase show a percentage and an estimate, and decide up
+    // front whether the job is big enough to deserve parser threads.
+    let mark = Date.now();
+    this.progress?.phase?.('scanning');
 
-      // Matched on stat alone; nothing was read.
-      if (file.unchanged) {
-        stats.unchanged++;
-        continue;
+    const entries = [];
+    let work = 0;     // progress units: bytes to be read, +1 so empty files count
+    let toRead = 0;
+    for (const entry of walk(this.config.root, this.config, { readContent: false, isUnchanged: statFilter })) {
+      entries.push(entry);
+      if (needsRead(entry)) {
+        work += entry.size + 1;
+        toRead++;
       }
+      this.progress?.tick(1, entry.rel);
+    }
+    stats.phases.scan = Date.now() - mark;
 
-      // The hash check comes first, before language detection and before any
-      // database write. Skipped files are the majority in most repos, and
-      // rewriting their stub rows on every run made a no-op update cost seconds
-      // — enough to make watch mode feel broken.
-      const prior = known.get(file.rel);
-      const unchanged = !force && this._isUnchanged(prior, file);
+    // 2. Index ---------------------------------------------------------------
+    mark = Date.now();
+    this.progress?.phase?.('indexing', { total: entries.length, work });
 
-      if (file.skipReason) {
-        stats.skipped++;
-        bump(stats.bySkip, file.skipReason);
-        if (!dryRun && !unchanged) this._persistStub(file);
-        continue;
-      }
-
-      const lang = this.registry?.detect(file.rel, file.content) ?? null;
-      if (!lang) {
-        stats.skipped++;
-        bump(stats.bySkip, 'no-language');
-        if (!dryRun && !unchanged) this._persistStub({ ...file, skipReason: 'no-language' });
-        continue;
-      }
-
-      bump(stats.byLang, lang.id);
-      const tok = estimate(file.content);
-      stats.tokens += tok;
-
-      if (unchanged) {
-        stats.unchanged++;
-        continue;
-      }
-
-      if (prior) stats.changed++;
-      else stats.added++;
-
-      if (dryRun) {
-        stats.files.push({ path: file.rel, lang: lang.id, size: file.size, tok });
-        continue;
-      }
-
-      pending.push({ file, lang, tok });
-
-      // Flush in batches so memory stays flat on large repos: holding the text
-      // of 40,000 files at once is gigabytes.
-      if (pending.length >= 64) {
-        await this._flush(pending, stats);
-        pending.length = 0;
-      }
+    if (!dryRun && toRead >= this.poolThreshold) {
+      const size = parserThreads(this.config.workers, toRead);
+      if (size > 1) stats.workers = (await this.registry?.openPool?.(size)) || 1;
     }
 
-    if (!dryRun) {
-      if (pending.length) await this._flush(pending, stats);
+    // Batches being parsed, oldest first. Without a pool there is never more
+    // than one, and this degenerates to "parse a batch, write it, repeat".
+    const inflight = [];
+    const maxInflight = stats.workers > 1 ? stats.workers * 2 : 1;
+    const dispatch = async (batch) => {
+      const parsed = this._parse(batch);
+      // Awaited later, in order. Marking it handled now keeps a failure in a
+      // later batch from surfacing as an unhandled rejection in the meantime.
+      parsed.catch(() => {});
+      // Stubs queued so far travel with this batch, so they are written at a
+      // point fixed by dispatch order rather than by when a thread happens to
+      // finish — row ids stay identical from run to run.
+      const stubs = this._stubs;
+      this._stubs = [];
+      inflight.push({ batch, parsed, stubs });
+      while (inflight.length >= maxInflight) await this._settle(inflight.shift(), stats);
+    };
 
-      // Evict files that disappeared from disk.
-      for (const [path, row] of known) {
-        if (!seen.has(path)) {
-          this.store.removeFile(row.id);
-          stats.removed++;
+    let pending = [];
+    let pendingChars = 0;
+
+    // Reads in flight, by position in `entries`. A failed read resolves to
+    // null rather than rejecting, so an abandoned one is never unhandled.
+    const reads = new Map();
+    let primed = 0;
+    const readAhead = (upTo) => {
+      for (; primed < entries.length && primed <= upTo; primed++) {
+        if (needsRead(entries[primed])) {
+          reads.set(primed, readFile(entries[primed].abs).catch(() => null));
         }
       }
+    };
+
+    try {
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        // What this file contributes to the progress bar once it is dealt with.
+        const cost = needsRead(entry) ? entry.size + 1 : 0;
+
+        let file = entry;
+        if (cost) {
+          readAhead(i + READ_AHEAD);
+          const buf = await reads.get(i);
+          reads.delete(i);
+          file = buf ? classifyFile(entry, buf, this.config) : null;
+          // Deleted or locked since the scan saw it. Treated as never seen, so
+          // a file that was indexed before is evicted below like any deletion.
+          if (!file) {
+            this.progress?.tick(1, entry.rel, cost);
+            continue;
+          }
+        }
+
+        stats.seen++;
+        seen.add(file.rel);
+        stats.bytes += file.size;
+
+        // Matched on stat alone; nothing was read.
+        if (file.unchanged) {
+          stats.unchanged++;
+          this.progress?.tick(1, file.rel);
+          continue;
+        }
+
+        // The hash check comes first, before language detection and before any
+        // database write. Skipped files are the majority in most repos, and
+        // rewriting their stub rows on every run made a no-op update cost seconds
+        // — enough to make watch mode feel broken.
+        const prior = known.get(file.rel);
+        const unchanged = !force && this._isUnchanged(prior, file);
+
+        if (file.skipReason) {
+          stats.skipped++;
+          bump(stats.bySkip, file.skipReason);
+          if (!dryRun && !unchanged) {
+            this._queueStub(file);
+            if (this._stubs.length >= STUB_BATCH) await dispatch([]);
+          }
+          this.progress?.tick(1, file.rel, cost);
+          continue;
+        }
+
+        const lang = this.registry?.detect(file.rel, file.content) ?? null;
+        if (!lang) {
+          stats.skipped++;
+          bump(stats.bySkip, 'no-language');
+          if (!dryRun && !unchanged) {
+            this._queueStub({ ...file, skipReason: 'no-language' });
+            if (this._stubs.length >= STUB_BATCH) await dispatch([]);
+          }
+          this.progress?.tick(1, file.rel, cost);
+          continue;
+        }
+
+        bump(stats.byLang, lang.id);
+        const tok = estimate(file.content);
+        stats.tokens += tok;
+
+        if (unchanged) {
+          stats.unchanged++;
+          this.progress?.tick(1, file.rel, cost);
+          continue;
+        }
+
+        if (prior) stats.changed++;
+        else stats.added++;
+
+        if (dryRun) {
+          stats.files.push({ path: file.rel, lang: lang.id, size: file.size, tok });
+          this.progress?.tick(1, file.rel, cost);
+          continue;
+        }
+
+        // Progress for a parsed file is reported when it is written, not when
+        // it is read: with a pool the reads run well ahead of the parsing.
+        pending.push({ file, lang, tok, cost });
+        pendingChars += file.content.length;
+
+        // Flush in batches so memory stays flat on large repos: holding the text
+        // of 40,000 files at once is gigabytes. The size cap keeps a run of
+        // unusually large files from becoming one indivisible unit of work.
+        if (pending.length >= BATCH_FILES || pendingChars >= BATCH_CHARS) {
+          await dispatch(pending);
+          pending = [];
+          pendingChars = 0;
+        }
+      }
+
+      if (!dryRun) {
+        if (pending.length || this._stubs.length) await dispatch(pending);
+        while (inflight.length) await this._settle(inflight.shift(), stats);
+      }
+    } finally {
+      // Threads are released before the single-threaded phases, and on any
+      // failure: a leaked worker keeps the process alive after the command has
+      // printed its error.
+      this._stubs = [];
+      await this.registry?.closePool?.();
+    }
+    stats.phases.index = Date.now() - mark;
+
+    if (!dryRun) {
+      // Evict files that disappeared from disk.
+      this.store.transaction(() => {
+        for (const [path, row] of known) {
+          if (!seen.has(path)) {
+            this.store.removeFile(row.id);
+            stats.removed++;
+          }
+        }
+      });
 
       // Resolution and ranking need the complete symbol table, so they run
       // after every file has been parsed rather than per file.
@@ -181,20 +327,32 @@ export class Indexer {
       // which is what watch mode does most of the time — stays instant.
       const touched = stats.added + stats.changed + stats.removed + stats.failed;
       if (this.registry && touched > 0) {
-        this.progress?.done();
+        // Both passes are synchronous and take seconds on a large graph.
+        // Naming them is the difference between "working" and "hung".
+        mark = Date.now();
+        this.progress?.phase?.('resolving');
         stats.resolution = new Resolver({
           store: this.store,
           config: this.config,
           registry: this.registry,
+          onProgress: (done, total) => this.progress?.update?.(done, total),
         }).run();
+        stats.phases.resolve = Date.now() - mark;
+
+        mark = Date.now();
+        this.progress?.phase?.('ranking');
         stats.ranking = computeRanks(this.store);
+        stats.phases.rank = Date.now() - mark;
       }
 
       this.store.setMeta('last_indexed_at', Date.now());
       this.store.setMeta('root', this.config.root);
       this.store.setMeta('packs_fingerprint', fingerprint);
+      // Every file has now been re-read, which is what the request was for.
+      if (force) this.store.clearFullReindex?.();
     }
 
+    this.progress?.done();
     stats.durationMs = Date.now() - started;
     return stats;
   }
@@ -223,6 +381,17 @@ export class Indexer {
   }
 
   /**
+   * Stubs are written in groups rather than one at a time. A lone write is its
+   * own transaction, and in a typical repo the files that are *not* parsed
+   * (assets, lockfiles, languages without queries) outnumber the ones that are
+   * — thousands of single-row commits on a fresh index. Queued here, they are
+   * written with the next batch to be dispatched.
+   */
+  _queueStub(file) {
+    this._stubs.push(file);
+  }
+
+  /**
    * Record a file we will not parse. Stubs matter: `map` should still show that
    * `logo.png` and `vendor/bundle.js` exist. A graph that silently omits them
    * would send an agent looking for a file it was told doesn't exist.
@@ -245,21 +414,32 @@ export class Indexer {
     });
   }
 
-  async _flush(batch, stats) {
-    if (!this.registry) {
-      // P0 path, and the path tests take when no packs are loaded: record file
-      // rows so the index is complete, without symbol extraction.
-      this.store.transaction(() => {
-        for (const { file, lang, tok } of batch) {
-          this._persistFileRow(file, lang, tok, 0);
-        }
-      });
-      return;
-    }
+  /** Parse a batch. Resolves to null when there is no registry to parse with. */
+  async _parse(batch) {
+    return this.registry ? this.registry.parseBatch(batch) : null;
+  }
 
-    const results = await this.registry.parseBatch(batch);
+  /** Parse one batch and write it, start to finish. */
+  async _flush(batch, stats) {
+    const stubs = this._stubs;
+    this._stubs = [];
+    return this._settle({ batch, parsed: this._parse(batch), stubs }, stats);
+  }
+
+  /** Wait for one dispatched batch, then write it. */
+  async _settle({ batch, parsed, stubs = [] }, stats) {
+    const results = await parsed;
 
     this.store.transaction(() => {
+      for (const file of stubs) this._persistStub(file);
+
+      if (!results) {
+        // P0 path, and the path tests take when no packs are loaded: record file
+        // rows so the index is complete, without symbol extraction.
+        for (const { file, lang, tok } of batch) this._persistFileRow(file, lang, tok, 0);
+        return;
+      }
+
       for (const result of results) {
         const { file, lang, tok, extraction, error, skipped } = result;
 
@@ -280,12 +460,17 @@ export class Indexer {
           continue;
         }
 
+        // _persistFileRow has already cleared whatever the file held before.
+        // Clearing a second time here ran nine DELETEs per file against rows
+        // that were never there — and one of them has to scan the trigram
+        // table, so on a fresh index each file cost more than the one before.
         const fileId = this._persistFileRow(file, lang, tok, 1);
-        this.store.clearFileData(fileId);
         this.registry.persist(this.store, fileId, file, extraction);
         stats.parsed++;
       }
     });
+
+    for (const item of batch) this.progress?.tick(1, item.file.rel, item.cost);
   }
 
   _persistFileRow(file, lang, tok, parsed, skipReason = null) {
@@ -305,6 +490,25 @@ export class Indexer {
       subproject: file.subproject ?? null,
     });
   }
+}
+
+/** A scanned file whose bytes still have to be read to decide anything. */
+function needsRead(entry) {
+  return !entry.unchanged && !entry.skipReason;
+}
+
+/**
+ * How many parser threads a run should use.
+ *
+ * `workers` from config or `--workers` wins when set, and 1 means "no pool".
+ * The automatic choice leaves a core for this thread, which is busy reading
+ * and writing throughout, and stops at eight: past that the single SQLite
+ * writer is the limit and extra parsers only cost memory.
+ */
+function parserThreads(configured, files) {
+  if (configured > 0) return Math.floor(configured);
+  const cores = os.availableParallelism?.() ?? os.cpus().length;
+  return Math.max(1, Math.min(cores - 1, 8, Math.ceil(files / 100)));
 }
 
 function countLines(text) {

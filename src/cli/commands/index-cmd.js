@@ -8,7 +8,7 @@
 import { loadConfig } from '../../core/config.js';
 import { Store } from '../../core/store.js';
 import { Indexer } from '../../core/indexer.js';
-import { out, json, color, toks, bytes, duration, pad, padLeft, Progress } from '../ui.js';
+import { out, json, color, toks, bytes, duration, pad, padLeft, Progress, phaseSummary } from '../ui.js';
 
 export async function run(args) {
   if (args.help) return help();
@@ -131,6 +131,8 @@ function report(stats, config, isUpdate, isDry) {
         `  ·  ${duration(stats.durationMs)}`
     )
   );
+  const breakdown = stats.durationMs >= 2000 ? phaseSummary(stats) : '';
+  if (breakdown) out(color.dim(`  ${breakdown}`));
   out('');
 }
 
@@ -176,7 +178,8 @@ ${color.bold('OPTIONS')}
   --dry-run      Walk and report only; does not create .cgraph/
   --verbose      With --dry-run, list every file
   --embed        Also generate embeddings (requires configuration; costs money)
-  --workers <n>  Parser worker count (default: cpus - 1)
+  --workers <n>  Parser threads for a large index (default: cores - 1, up to 8;
+                 1 parses on the main thread only)
   --json         Machine-readable output
   --quiet        No progress output
 `);

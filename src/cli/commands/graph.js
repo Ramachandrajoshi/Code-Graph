@@ -7,6 +7,7 @@
  */
 
 import { loadConfig } from '../../core/config.js';
+import { displayName } from '../../core/search.js';
 import { Store } from '../../core/store.js';
 import { findSymbol, formatConfidence } from '../../core/retrieve.js';
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../../core/graph.js';
@@ -117,7 +118,7 @@ function renderCallers(store, node, args, lines) {
   });
   const d = degree(store, node.id);
 
-  lines.push(`${node.qname}  ${node.path}:${node.start_line}`);
+  lines.push(`${displayName(node)}  ${node.path}:${node.start_line}`);
   lines.push(`callers: ${d.callers}   callees: ${d.callees}`);
   lines.push('');
 
@@ -127,7 +128,7 @@ function renderCallers(store, node, args, lines) {
   }
   for (const r of rows) {
     const times = r.sites > 1 ? ` (${r.sites}x)` : '';
-    lines.push(`${confMark(r.confidence)} ${r.qname}  ${r.path}:${r.line}  ${r.edge_kind}${times}`);
+    lines.push(`${confMark(r.confidence)} ${displayName(r)}  ${r.path}:${r.line}  ${r.edge_kind}${times}`);
   }
   if (rows.some((r) => r.confidence !== 'EXACT')) {
     lines.push('');
@@ -141,7 +142,7 @@ function renderCallees(store, node, args, lines) {
   lines.push(`${node.qname} calls:`);
   lines.push('');
   for (const r of internal) {
-    lines.push(`${confMark(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}`);
+    lines.push(`${confMark(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}`);
   }
   if (external.length) {
     lines.push('');
@@ -191,7 +192,7 @@ function renderImpact(store, node, args, lines) {
       currentDepth = r.distance;
       lines.push(`  ${currentDepth === 1 ? 'direct' : `${currentDepth} hops`}:`);
     }
-    lines.push(`  ${confMark(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}`);
+    lines.push(`  ${confMark(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}`);
   }
 
   if (result.truncated) {
@@ -207,7 +208,7 @@ function renderImpact(store, node, args, lines) {
  */
 function renderExplore(store, node, args, lines) {
   const d = degree(store, node.id);
-  lines.push(`${node.qname}  ${node.path}:${node.start_line}-${node.end_line}`);
+  lines.push(`${displayName(node)}  ${node.path}:${node.start_line}-${node.end_line}`);
   lines.push('');
 
   const callerRows = callers(store, node.id, {
@@ -220,7 +221,7 @@ function renderExplore(store, node, args, lines) {
   } else {
     for (const r of callerRows) {
       const times = r.sites > 1 ? ` (${r.sites}x)` : '';
-      lines.push(`${confMark(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}${times}`);
+      lines.push(`${confMark(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}-${r.end_line}${times}`);
     }
   }
 
@@ -231,7 +232,7 @@ function renderExplore(store, node, args, lines) {
     lines.push('  (calls nothing this index knows about)');
   } else {
     for (const r of internal) {
-      lines.push(`${confMark(r.confidence)} ${r.qname}  ${r.path}:${r.start_line}-${r.end_line}`);
+      lines.push(`${confMark(r.confidence)} ${displayName(r)}  ${r.path}:${r.start_line}-${r.end_line}`);
     }
     if (external.length) {
       lines.push('  external:');
@@ -259,7 +260,7 @@ function renderPath(store, node, args, lines) {
   lines.push(`${rows.length - 1} hops from ${node.qname} to ${dest.qname}:`);
   lines.push('');
   rows.forEach((r, i) => {
-    lines.push(`  ${i === 0 ? ' ' : '↓'} ${r.qname}  ${r.path}:${r.start_line}`);
+    lines.push(`  ${i === 0 ? ' ' : '↓'} ${displayName(r)}  ${r.path}:${r.start_line}`);
   });
 }
 

@@ -29,6 +29,9 @@
 export { tryCandidates, normalizeRelative, EXACT, INFERRED } from '../core/resolve.js';
 export { splitIdentifier, identifierParts, trigrams } from '../core/identifiers.js';
 export { estimate } from '../core/tokens.js';
+// For `docComment` hooks: read what sits above a definition without slicing
+// the whole file prefix once per definition, which is quadratic.
+export { linesAbove, trimEndIndex } from '../core/text.js';
 
 /** Capture names the extractor understands. Packs may invent new suffixes. */
 export const CAPTURES = {

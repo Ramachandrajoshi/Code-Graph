@@ -288,23 +288,44 @@ function* walkDir(root, dirRel, stack, subprojectRel, config, readContent, isUnc
       continue;
     }
 
-    let buf;
-    try {
-      buf = fs.readFileSync(absFile);
-    } catch {
-      continue;
-    }
-
-    const hash = hashContent(buf);
-    if (looksBinary(buf)) {
-      yield { ...base, hash, skipReason: 'binary' };
-      continue;
-    }
-
-    const content = buf.toString('utf8');
-    const skipReason = generatedReason(rel, content, config);
-    yield { ...base, hash, content, skipReason };
+    const loaded = loadFile(base, config);
+    if (loaded) yield loaded;
   }
+}
+
+/**
+ * Read one discovered file and classify it by content.
+ *
+ * Takes a stat-only record from `walk(..., { readContent: false })` and returns
+ * what the reading walk would have yielded for it: the record plus `hash`, and
+ * either `content` or a content-derived `skipReason`. Returns null when the
+ * file cannot be read (deleted or locked since the walk saw it).
+ *
+ * Split out from the walk so the indexer can discover every file first — which
+ * is what gives it a total to report progress against — and only then pay for
+ * the reads.
+ */
+export function loadFile(file, config) {
+  let buf;
+  try {
+    buf = fs.readFileSync(file.abs);
+  } catch {
+    return null;
+  }
+  return classifyFile(file, buf, config);
+}
+
+/**
+ * The half of `loadFile` that follows the read, for a caller that fetched the
+ * bytes itself — the indexer reads ahead asynchronously so that several files
+ * are being opened at once instead of one.
+ */
+export function classifyFile(file, buf, config) {
+  const hash = hashContent(buf);
+  if (looksBinary(buf)) return { ...file, hash, skipReason: 'binary' };
+
+  const content = buf.toString('utf8');
+  return { ...file, hash, content, skipReason: generatedReason(file.rel, content, config) };
 }
 
 /**

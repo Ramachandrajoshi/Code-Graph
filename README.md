@@ -91,7 +91,7 @@ The full list is in the [CHANGELOG](CHANGELOG.md).
 
 ```
 cgraph map [path]        Outline a repo, directory, or file   (replaces ls, glob)
-cgraph find <query>      Ranked symbol search                 (replaces grep)
+cgraph find <query>      Ranked search: name, description, "text" (replaces grep)
 cgraph read <symbol>     Exactly one symbol or line range     (replaces read)
 cgraph graph <symbol>    Callers, callees, impact, paths      (no shell equivalent)
 
@@ -408,7 +408,7 @@ server spends 3-4k tokens forever to save tokens on retrieval.
 | Tool | Replaces |
 |---|---|
 | `map` | `ls`, `glob`, exploratory reads, **and** callers/callees/impact/path (nothing, previously) — pass `path` for an outline or `symbol` for relationships, never both |
-| `find` | `grep` |
+| `find` | `grep` — by name ("login" finds `handleLogin`), by description ("retry failed upload" searches docs and function bodies), or by quoted literal text, reported under the symbol each line is in |
 
 `read` and `status` are deliberately not MCP tools: every harness already has
 an exact, line-based file reader, and freshness is handled automatically (a
@@ -501,8 +501,10 @@ data. Report vulnerabilities privately through the repository's
 
 Both are opt-in and off by default.
 
-**Embeddings** — for "find the code that does X" when you don't know what X is
-called. Structural search is always tried first. Because these settings decide
+**Embeddings** — for "find the code that does X" when the words you would use
+appear nowhere in the code. `find` already searches doc comments and the words
+used inside function bodies, which answers most such questions with no model
+and nothing leaving the machine; try it first. Because these settings decide
 where code is sent, they take effect only after `cgraph trust`
 ([Security](#security)).
 

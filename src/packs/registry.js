@@ -109,7 +109,37 @@ export class PackRegistry {
     registry.blockedPacks = external.blocked;
     registry.lazy = !allPacks;
     registry.strict = config.packs?.strict ?? false;
+    // Kept so parser threads can load a registry that matches this one exactly.
+    registry.loadOptions = { allPacks, trusted };
     return registry;
+  }
+
+  /**
+   * Start parser threads. Until `closePool`, `parseBatch` hands its work to
+   * them instead of parsing on this thread.
+   *
+   * Returns how many threads are running, or 0 when a pool could not be
+   * started — in which case nothing changes and parsing simply stays here.
+   * Only a registry built by `load` can be pooled: the workers have to be able
+   * to rebuild it from config.
+   */
+  async openPool(size) {
+    if (this.pool || !this.loadOptions || size < 2) return this.pool?.size ?? 0;
+    try {
+      const { ParsePool } = await import('./parse-pool.js');
+      this.pool = new ParsePool(size, { config: this.config, loadOptions: this.loadOptions });
+      return this.pool.size;
+    } catch {
+      // No worker_threads, or a config that cannot be cloned to one.
+      this.pool = null;
+      return 0;
+    }
+  }
+
+  async closePool() {
+    const pool = this.pool;
+    this.pool = null;
+    await pool?.close();
   }
 
   /**
@@ -127,20 +157,31 @@ export class PackRegistry {
    */
   async ensurePackFor(langId) {
     if (this.packs.has(langId) || this._unavailable?.has(langId)) return this.packs.get(langId);
-    if (this.strict || !BUILTIN.includes(langId)) {
+
+    // A language is not always served by a pack of the same name: `tsx` comes
+    // from the typescript pack. Looking only for a directory called `tsx`
+    // found nothing, marked the language unavailable for the rest of the run,
+    // and a .tsx file met before any .ts file was recorded as having no
+    // queries — in a repository that parsed its .ts files perfectly well.
+    const packId = this.strict ? null : await builtinPackFor(langId);
+    if (!packId) {
       (this._unavailable ??= new Set()).add(langId);
       return null;
     }
 
     try {
       const pack = await importPack({
-        dir: new URL(`./${langId}/`, import.meta.url), origin: `builtin:${langId}`,
+        dir: new URL(`./${packId}/`, import.meta.url), origin: `builtin:${packId}`,
       });
       if (!pack) return null;
       for (const lang of pack.languages ?? [pack.id]) {
-        if (!this.packs.has(lang)) this.packs.set(lang, { ...pack, _origin: `builtin:${langId}` });
+        if (!this.packs.has(lang)) this.packs.set(lang, { ...pack, _origin: `builtin:${packId}` });
+        // Anything concluded about this language before its pack arrived —
+        // "no queries", chiefly — was about its absence and no longer holds.
+        this.queryCache.delete(lang);
+        this.missingQueries.delete(lang);
+        this._unavailable?.delete(lang);
       }
-      this._fingerprint = null;   // the pack set changed
       return this.packs.get(langId);
     } catch (err) {
       process.emitWarning(`cgraph: failed to load pack ${langId}: ${err.message}`);
@@ -209,6 +250,62 @@ export class PackRegistry {
    * edge case must not abort an index of forty thousand.
    */
   async parseBatch(batch) {
+    return this.pool ? this._parsePooled(batch) : this._parseInline(batch);
+  }
+
+  /**
+   * `parseBatch` with the parsing done on a pool thread.
+   *
+   * Everything that changes this registry's own state still happens here, so
+   * the main thread ends a pooled run knowing exactly what an inline run would
+   * have taught it: lazily-loaded packs are loaded (the resolver needs their
+   * hooks), languages without queries are recorded as gaps and never sent, and
+   * each grammar is fetched once up front rather than raced for by every
+   * thread that meets the language at the same moment.
+   */
+  async _parsePooled(batch) {
+    const results = new Array(batch.length);
+    const sent = [];
+
+    for (let i = 0; i < batch.length; i++) {
+      const item = batch[i];
+      const { lang } = item;
+      try {
+        if (this.lazy && !this.packs.has(lang.id)) await this.ensurePackFor(lang.id);
+        if (!this.queriesFor(lang.id).tags) {
+          results[i] = { ...item, extraction: null, error: null, skipped: 'no-queries' };
+          continue;
+        }
+        await this.host.prefetch(lang.grammar);
+        sent.push(i);
+      } catch (err) {
+        results[i] = { ...item, extraction: null, error: err.message };
+      }
+    }
+
+    if (sent.length) {
+      let parsed;
+      try {
+        parsed = await this.pool.run(
+          sent.map((i) => ({ rel: batch[i].file.rel, content: batch[i].file.content, lang: batch[i].lang }))
+        );
+      } catch {
+        // The thread holding this batch was lost. Parse it here instead: slower
+        // for these files, but nothing is dropped and the run carries on.
+        parsed = await this._parseInline(sent.map((i) => batch[i]));
+      }
+
+      sent.forEach((i, k) => {
+        const { extraction, error, skipped } = parsed[k];
+        results[i] = { ...batch[i], extraction, error };
+        if (skipped) results[i].skipped = skipped;
+      });
+    }
+
+    return results;
+  }
+
+  async _parseInline(batch) {
     const results = [];
 
     for (const item of batch) {
@@ -280,6 +377,7 @@ export class PackRegistry {
         visibility: n.visibility,
         isExported: n.isExported,
         tok: n.tok,
+        body: n.body,
       });
     }
 
@@ -323,8 +421,15 @@ export class PackRegistry {
     if (this._fingerprint) return this._fingerprint;
 
     const parts = [];
+    const loadedBuiltins = new Set();
+
     for (const [lang, pack] of [...this.packs].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-      parts.push(`${lang}:${pack.id}:${pack._origin ?? ''}`);
+      const origin = pack._origin ?? '';
+      if (origin.startsWith('builtin:')) {
+        loadedBuiltins.add(origin.slice('builtin:'.length));
+        continue;
+      }
+      parts.push(`${lang}:${pack.id}:${origin}`);
       for (const [key, file] of Object.entries(pack.queries ?? {}).sort()) {
         try {
           parts.push(`${key}:${createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 16)}`);
@@ -334,11 +439,30 @@ export class PackRegistry {
       }
     }
 
+    // Builtins are fingerprinted by what is on disk, not by what happens to be
+    // loaded. A builtin loads lazily the first time its language is seen, so
+    // "the loaded set" was different at the start of a run than at the end of
+    // it — and different again in the next process. Every run therefore
+    // disagreed with the fingerprint the previous one stored, concluded the
+    // packs had changed, re-read every file it had skipped for lack of queries
+    // and re-resolved the whole graph: once after each real change in a
+    // long-lived server, and again each time the CLI and the server took
+    // turns. Under `strict` nothing loads lazily, so only what detection
+    // loaded counts.
+    for (const id of [...BUILTIN].sort()) {
+      if (this.strict && !loadedBuiltins.has(id)) continue;
+      parts.push(`builtin:${id}:${hashQueryDir(id)}`);
+    }
+    parts.push(`strict:${this.strict ? 1 : 0}`);
+
     this._fingerprint = createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 32);
     return this._fingerprint;
   }
 
   dispose() {
+    // Not awaited: dispose is synchronous for its callers, and terminating a
+    // thread needs no cooperation from it.
+    this.closePool();
     this.host.dispose();
   }
 }
@@ -385,6 +509,46 @@ function discoverExternal(config, trusted) {
   }
 
   return { found, blocked };
+}
+
+/** Digest of a builtin pack's query files, or 'none' if it ships none. */
+function hashQueryDir(id) {
+  const dir = new URL(`./${id}/queries/`, import.meta.url);
+  try {
+    const hash = createHash('sha256');
+    for (const name of fs.readdirSync(dir).sort()) {
+      hash.update(name).update(fs.readFileSync(new URL(name, dir)));
+    }
+    return hash.digest('hex').slice(0, 16);
+  } catch {
+    return 'none';
+  }
+}
+
+/**
+ * Which builtin pack serves a language, or null.
+ *
+ * Usually the pack named after it. Otherwise each builtin is asked what it
+ * declares — an import of a small module apiece, done once and only for a
+ * language that had no pack of its own name.
+ */
+let languageOwners = null;
+async function builtinPackFor(langId) {
+  if (BUILTIN.includes(langId)) return langId;
+  if (!languageOwners) {
+    languageOwners = new Map();
+    for (const id of BUILTIN) {
+      try {
+        const pack = await importPack({ dir: new URL(`./${id}/`, import.meta.url), origin: `builtin:${id}` });
+        for (const lang of pack?.languages ?? []) {
+          if (!languageOwners.has(lang)) languageOwners.set(lang, id);
+        }
+      } catch {
+        // A builtin that cannot be imported serves no languages.
+      }
+    }
+  }
+  return languageOwners.get(langId) ?? null;
 }
 
 async function importPack({ dir, origin }) {

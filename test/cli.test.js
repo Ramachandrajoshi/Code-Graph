@@ -500,8 +500,8 @@ test('CLI and MCP emit the same `!` marker for an inferred edge', opts, () => {
 
     const cliOut = run(root, ['graph', 'shared', '--dir', 'callers']);
     // The marker is the shared helper's output and prefixes the inferred caller
-    // row (qname is the fully-qualified `src/b.js::caller`).
-    assert.ok(cliOut.includes(`${formatConfidence('INFERRED')} src/b.js::caller`),
+    // row (the caller's name, then its file).
+    assert.ok(cliOut.includes(`${formatConfidence('INFERRED')} caller  src/b.js`),
       `CLI must mark the inferred caller with the shared marker:\n${cliOut}`);
     assert.match(cliOut, /inferred/, 'CLI keeps the legend explaining !');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -536,7 +536,7 @@ test('each command --help prints its usage block', opts, () => {
   // help() branch, which is dead code if the router never forwards --help.
   const root = setup();
   const probes = {
-    map: /outline/i, find: /search symbols/i, read: /read exactly one symbol/i,
+    map: /outline/i, find: /search code/i, read: /read exactly one symbol/i,
     graph: /traverse relationships/i, stats: /index size/i, doctor: /index health/i,
     index: /build or refresh/i, update: /build or refresh/i,
   };

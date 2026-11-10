@@ -15,6 +15,8 @@
  */
 
 import { estimate } from './tokens.js';
+import { linesAbove } from './text.js';
+import { searchTerms } from './identifiers.js';
 
 /** Capture prefixes we understand. Packs may emit any suffix after the dot. */
 const DEF_PREFIX = 'definition.';
@@ -113,6 +115,13 @@ export function extract({ path, source, captures, pack }) {
       visibility: pack.visibility?.(def, source) ?? genericVisibility(name),
       isExported: pack.isExported?.(def, source) ? 1 : 0,
       tok: estimate(source.slice(def.startByte, def.endByte)),
+      // Words used inside a callable, for search by what code does rather than
+      // what it is called. Containers are skipped: a class's words are its
+      // members' words, and indexing them twice would only make every query
+      // return the class alongside the method that actually matched.
+      body: kind === 'function' || kind === 'method'
+        ? searchTerms(source.slice(def.startByte, def.endByte))
+        : null,
       parentIndex: parent.index,
       depth: parent.node.depth + 1,
     };
@@ -270,13 +279,11 @@ function genericSignature(def, source) {
  * essentially every language in the grammar set.
  */
 function genericDocComment(def, source) {
-  const before = source.slice(0, def.startByte);
-  const lines = before.split('\n');
-  lines.pop(); // partial line the definition starts on
-
+  // Read upwards and stop at the first non-comment line. Splitting the whole
+  // prefix instead made this quadratic in file size (see core/text.js).
   const collected = [];
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
+  for (const raw of linesAbove(source, def.startByte)) {
+    const line = raw.trim();
     if (!line) {
       // A blank line ends the block, unless nothing has been collected yet
       // (handles a blank line between a decorator and its comment).

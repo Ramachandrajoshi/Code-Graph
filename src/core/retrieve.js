@@ -262,10 +262,16 @@ export function findSymbol(store, query, { limit = 10 } = {}) {
   );
   if (exactName.length) return exactName;
 
+  // A qualified name without its path (`Class#method`, as search results print
+  // it) lands here. Names ending in the query come first: `Store#open` means
+  // that method, not `Store#openDatabase`, however the two happen to rank.
+  // The query is escaped, so a `_` in a name is not a wildcard.
+  const like = query.replace(/[\\%_]/g, (c) => `\\${c}`);
   return store.all(
     `SELECT n.*, f.path FROM nodes n JOIN files f ON f.id = n.file_id
-      WHERE n.qname LIKE ? ORDER BY n.rank DESC, n.id LIMIT ?`,
-    `%${query}%`, limit
+      WHERE n.qname LIKE ? ESCAPE '\\'
+      ORDER BY (n.qname LIKE ? ESCAPE '\\') DESC, n.rank DESC, n.id LIMIT ?`,
+    `%${like}%`, `%${like}`, limit
   );
 }
 

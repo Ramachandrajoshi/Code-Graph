@@ -36,10 +36,33 @@ function makeRepo(files) {
   return root;
 }
 
-function init(root, extra = []) {
+function init(root, extra = [], env = process.env) {
   return execFileSync(process.execPath, [BIN, 'init', '--root', root, '--quiet', ...extra], {
-    encoding: 'utf8', cwd: root,
+    encoding: 'utf8', cwd: root, env,
   });
+}
+
+/**
+ * The environment with any globally installed `cgraph` taken off PATH.
+ *
+ * `init` registers a bare `cgraph` when one is on PATH. On a maintainer's
+ * machine that is whatever version was last installed globally — not the code
+ * under test — and after a schema change the older binary rightly refuses the
+ * index this checkout just built. The test then fails for a reason that has
+ * nothing to do with the change being tested, and only on the one machine a
+ * release is cut from. Without it on PATH, init registers this checkout by
+ * absolute path, which is the thing that has to start.
+ */
+function envWithoutGlobalCgraph() {
+  const names = process.platform === 'win32'
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((ext) => `cgraph${ext}`)
+    : ['cgraph'];
+  const key = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  const kept = (process.env[key] ?? '').split(path.delimiter).filter((dir) => {
+    if (!dir) return false;
+    return !names.some((name) => fs.existsSync(path.join(dir, name)));
+  });
+  return { ...process.env, [key]: kept.join(path.delimiter) };
 }
 
 const BASE = {
@@ -59,7 +82,7 @@ test('creates the index and a config file', opts, () => {
 test('registers an MCP server in .mcp.json', opts, () => {
   const root = makeRepo(BASE);
   try {
-    init(root);
+    init(root, [], envWithoutGlobalCgraph());
     const mcp = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8'));
     const entry = mcp.mcpServers['cgraph'];
     assert.ok(entry, 'server registered');

@@ -3,6 +3,7 @@
  */
 
 import { loadConfig } from '../../core/config.js';
+import { displayName } from '../../core/search.js';
 import { Store } from '../../core/store.js';
 import { findSymbol, readSymbol } from '../../core/retrieve.js';
 import { UsageLedger } from '../../core/tokens.js';
@@ -94,7 +95,7 @@ function readByName(store, root, query, { mode, budget, all }) {
     result.lines.push('');
     result.lines.push(`${rest.length} other match${rest.length > 1 ? 'es' : ''}:`);
     for (const m of rest.slice(0, 8)) {
-      result.lines.push(`  ${m.qname}  ${m.path}:${m.start_line}`);
+      result.lines.push(`  ${displayName(m)}  ${m.path}:${m.start_line}`);
     }
     return result;
   }

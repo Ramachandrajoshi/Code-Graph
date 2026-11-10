@@ -101,15 +101,17 @@ cgraph graph a --dir path --to b        # call path between two symbols
 - Before changing anything shared, run \`map <symbol>\` with \`--dir impact\` to
   see what depends on it.
 
-## find — ranked symbol search (replaces grep)
+## find — ranked code search (replaces grep)
 
 \`\`\`bash
-cgraph find login        # matches camelCase parts: finds \`handleLogin\`
+cgraph find login                   # a name, or part of one: finds \`handleLogin\`
+cgraph find retry failed upload     # or describe it: docs and function bodies are searched
 cgraph find Store --kind class
-cgraph find "parse query" --path src/core
+cgraph find '"connection refused"'  # quoted: every line with that text, by enclosing symbol
 \`\`\`
 
-Returns definitions with exact locations, ranked by importance — not line hits.
+Returns ranked definitions as \`path:start-end\` — read exactly those lines. A
+query that matches no symbol is tried as literal text before it gives up.
 
 ## Rules
 
@@ -117,9 +119,8 @@ Returns definitions with exact locations, ranked by importance — not line hits
   import. Verify before relying on them.
 - The index refreshes itself before every call. If it still looks stale, run
   \`cgraph update\`.
-- Use your own file reader for full-file or line-range reads: \`map\`/\`find\`
-  index definitions, calls, and imports — not plain text. Fall back to grep for
-  string literals and comments.
+- Use your own file reader for the line ranges \`map\` and \`find\` return.
+  For string literals and comments, quote the text: \`find '"some text"'\`.
 - \`--budget <n>\` caps a response's tokens. A truncated answer always says
   so and counts what it dropped — narrow the path or raise the budget.
 `;

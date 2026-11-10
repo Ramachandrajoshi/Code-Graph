@@ -25,7 +25,7 @@ import {
   writeClaudeSettings, launchCommand,
 } from '../../agents.js';
 import { installSkill } from '../../skills.js';
-import { out, color, Progress, toks, duration } from '../ui.js';
+import { out, color, Progress, toks, duration, count, phaseSummary } from '../ui.js';
 
 export async function run(args) {
   if (args.help) return help();
@@ -53,7 +53,9 @@ export async function run(args) {
   try {
     const registry = await PackRegistry.load(config);
     const progress = new Progress('  indexing', { quiet: args.quiet });
-    stats = await new Indexer({ store, config, registry, progress }).run({});
+    // --workers applies to this run only; it is not written to config.json.
+    const runConfig = args.workers > 0 ? { ...config, workers: args.workers } : config;
+    stats = await new Indexer({ store, config: runConfig, registry, progress }).run({});
     progress.done();
 
     // What was detected drives which packs loaded, so showing it lets a wrong
@@ -84,8 +86,12 @@ export async function run(args) {
     }
 
     const s = store.stats();
-    out(`  indexed   ${s.parsed} files, ${s.nodes} symbols, ${s.edges} edges`);
+    out(`  indexed   ${count(s.parsed)} files, ${count(s.nodes)} symbols, ${count(s.edges)} edges`);
     out(`            ~${toks(s.tok)} tokens of source  ·  ${duration(stats.durationMs)}`);
+    // Where the time went. On a large repository this is the line that says
+    // whether a slow index was the disk, the parsing, or the graph passes.
+    const breakdown = stats.durationMs >= 2000 ? phaseSummary(stats) : '';
+    if (breakdown) out(color.dim(`            ${breakdown}`));
 
     const gaps = registry.gaps();
     if (gaps.length) {
@@ -256,6 +262,7 @@ ${color.bold('OPTIONS')}
   --no-mcp             Skip all agent files
   --no-skill           Skip the Agent Skill
   --root <dir>         Project directory (default: current)
+  --workers <n>        Parser threads for a large index (default: cores - 1, up to 8)
   --quiet              No progress output
 `);
 }

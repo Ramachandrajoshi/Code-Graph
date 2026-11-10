@@ -11,6 +11,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 
 /** Convert a native path to POSIX form (`a\b` -> `a/b`). Idempotent on POSIX. */
 export function toPosix(p) {
@@ -52,12 +53,16 @@ export function absFromRoot(root, rel) {
 /**
  * Walk upward from `start` looking for a directory marker (`.git`, `.cgraph`).
  * Returns the containing directory, or null.
+ *
+ * @param {(markerPath: string) => boolean} [accept] a marker that exists is
+ *   only counted when this returns true; the walk carries on upward otherwise.
  */
-export function findUp(start, markers) {
+export function findUp(start, markers, accept = null) {
   let dir = path.resolve(start);
   for (;;) {
     for (const marker of markers) {
-      if (fs.existsSync(path.join(dir, marker))) return dir;
+      const candidate = path.join(dir, marker);
+      if (fs.existsSync(candidate) && (!accept || accept(candidate))) return dir;
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null;
@@ -74,10 +79,34 @@ export function findUp(start, markers) {
  */
 export function findProjectRoot(cwd = process.cwd()) {
   return (
-    findUp(cwd, ['.cgraph']) ??
+    findUp(cwd, ['.cgraph'], isProjectIndexDir) ??
     findUp(cwd, ['.git']) ??
     path.resolve(cwd)
   );
+}
+
+/**
+ * Is this `.cgraph` a project's index directory, rather than the machine-wide
+ * cache?
+ *
+ * The cache — grammars, user packs, the trust list — lives in `~/.cgraph`,
+ * the same name a project's index directory has. Taken as a project marker,
+ * it made the home directory the "project root" of every directory beneath it
+ * that had not been initialised yet: `cgraph index` in a fresh clone would
+ * set about indexing the whole home directory, and the tests for this function
+ * failed on any machine that had ever used the tool.
+ *
+ * The cache directory still counts when it holds an index, which is what a
+ * person who really did run `cgraph init` in their home directory has.
+ */
+function isProjectIndexDir(dir) {
+  // Both the configured cache and the default location: with CGRAPH_HOME set,
+  // a `~/.cgraph` left over from before it was set is still not a project.
+  const resolved = path.resolve(dir);
+  const caches = [path.join(os.homedir(), '.cgraph')];
+  if (process.env.CGRAPH_HOME) caches.push(path.resolve(process.env.CGRAPH_HOME));
+  if (!caches.includes(resolved)) return true;
+  return fs.existsSync(path.join(dir, 'index.db'));
 }
 
 /** Split a repo-relative path into its directory segments (no filename). */

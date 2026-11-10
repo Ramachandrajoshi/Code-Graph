@@ -50,6 +50,24 @@ export class ParserHost {
   }
 
   /**
+   * Make sure a grammar is on disk, without loading it.
+   *
+   * For a caller about to hand the grammar to several threads at once: fetching
+   * it here first means one download, not one per thread racing to write the
+   * same cache file. Failure is swallowed — whoever actually loads the grammar
+   * will hit the same error and report it against the file being parsed.
+   */
+  async prefetch(name) {
+    if (this.languages.has(name) || this._prefetched?.has(name)) return;
+    (this._prefetched ??= new Set()).add(name);
+    try {
+      await resolveGrammar(name, { offline: this.offline, onDownload: this.onDownload });
+    } catch {
+      // Reported per file by the thread that loads it.
+    }
+  }
+
+  /**
    * Compile and cache a query.
    *
    * A malformed .scm is a pack-authoring error, and tree-sitter's native message

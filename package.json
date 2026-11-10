@@ -37,6 +37,7 @@
     "test:watch": "node --test --watch \"test/**/*.test.js\"",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"node_modules/**\" \"test/**/*.test.js\"",
     "bench": "node bench/run.js",
+    "bench:search": "node bench/search.js",
     "prepublishOnly": "npm test",
     "release": "node scripts/release.js"
   },

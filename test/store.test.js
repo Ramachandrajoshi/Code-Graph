@@ -57,7 +57,7 @@ test('listSubprojects ignores files with no subproject', async () => {
   store.close();
 });
 
-test('a migration with forceReindex sets needsFullReindex only on the crossing call', async () => {
+test('a migration with forceReindex asks for a reindex until one has been done', async () => {
   // Store.memory() is always a fresh database, so every migration — including
   // the v3 'subprojects' migration, which is marked forceReindex — runs on
   // this very call.
@@ -65,17 +65,26 @@ test('a migration with forceReindex sets needsFullReindex only on the crossing c
   assert.equal(fresh.needsFullReindex, true, 'crossing the migration sets the flag');
   fresh.close();
 
-  // A file-backed database already at the current version, on the other
-  // hand, must not re-set it on a later open: the migration loop skips any
-  // version already applied, so the forceReindex branch never runs again.
+  // The request has to outlive the process that discovered it. The first
+  // thing to open an index after an upgrade is as likely to be `cgraph find`
+  // or the MCP server as the indexer; when the flag lived only in memory, that
+  // process exited and the reindex the migration needed never happened — the
+  // new column stayed empty for every file that did not change afterwards.
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-store-')), 'index.db');
   const first = await Store.open(file);
   assert.equal(first.needsFullReindex, true);
   first.close();
 
   const second = await Store.open(file);
-  assert.equal(second.needsFullReindex, false, 'reopening an up-to-date database must not force a reindex');
+  assert.equal(second.needsFullReindex, true, 'a reader that opened the index first must not swallow the request');
+  second.clearFullReindex();
   second.close();
+
+  // Once a full index has run, later opens are quiet again: the migration
+  // loop skips any version already applied.
+  const third = await Store.open(file);
+  assert.equal(third.needsFullReindex, false, 'a completed reindex is not asked for again');
+  third.close();
 });
 
 test('upsertFile inserts once and updates in place', async () => {

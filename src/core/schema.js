@@ -18,7 +18,7 @@
  * touches again.
  */
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const MIGRATIONS = [
   {
@@ -238,6 +238,26 @@ CREATE INDEX idx_imports_spec ON imports(spec);
 --------------------------------------------------------------------------------
 ALTER TABLE files ADD COLUMN subproject TEXT;
 CREATE INDEX idx_files_subproject ON files(subproject);
+`,
+  },
+
+  {
+    version: 4,
+    name: 'delete-indexes',
+    up: `
+--------------------------------------------------------------------------------
+-- Indexes that make removing a file's rows proportional to the file.
+--
+-- Re-indexing a changed file starts by deleting its nodes, and every table
+-- that references a node has to be searched for rows to delete with it: once
+-- by the explicit cleanup, and once more per node by the foreign-key cascade.
+-- trigrams and refs had no index leading with the node id, so each of those
+-- searches was a scan of the whole table. The cost of updating one file grew
+-- with the size of the repository, and re-indexing a repository that was
+-- already indexed took several times longer than indexing it from empty.
+--------------------------------------------------------------------------------
+CREATE INDEX idx_trigrams_node ON trigrams(node_id);
+CREATE INDEX idx_refs_src ON refs(src_id);
 `,
   },
 ];

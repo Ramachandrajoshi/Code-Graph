@@ -72,7 +72,14 @@ test('findUp returns the nearest ancestor directory containing a marker', () => 
     fs.writeFileSync(path.join(base, 'a', '.git'), 'gitfile');
 
     assert.equal(findUp(deep, ['.git']), path.resolve(base, 'a'));
-    assert.equal(findUp(deep, ['.cgraph']), null, 'no .cgraph anywhere in this tree');
+    // A marker name that cannot exist above the temp directory. This used to
+    // ask for '.cgraph', which is also the name of the machine-wide cache in
+    // the home directory — so the test failed on any machine that had used
+    // cgraph, for a reason that had nothing to do with findUp.
+    assert.equal(findUp(deep, ['.cgraph-marker-absent']), null, 'a marker found nowhere above yields null');
+
+    // An existing marker can be vetoed, and the walk continues past it.
+    assert.equal(findUp(deep, ['.git'], () => false), null);
 
     // Multiple markers: the first directory that holds ANY of them wins.
     fs.writeFileSync(path.join(base, 'a', 'b', '.cgraph'), 'x');
@@ -126,6 +133,44 @@ test('findProjectRoot prefers .cgraph, then .git, then falls back to cwd', () =>
       assert.equal(findProjectRoot(plain), path.resolve(plain), 'cwd fallback when no repo markers exist');
     }
   } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('the machine-wide cache directory is not mistaken for a project', () => {
+  // The cache is `~/.cgraph` — the same name as a project's index directory.
+  // Counted as a project marker, it made the home directory the root of every
+  // un-initialised directory beneath it: `cgraph index` in a fresh clone under
+  // $HOME would walk the entire home directory. It only shows up once the
+  // cache exists, i.e. on every machine that has run cgraph at least once, and
+  // never in CI — which is how it shipped.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cgraph-paths-'));
+  const priorHome = process.env.CGRAPH_HOME;
+  try {
+    const home = path.join(base, 'home');
+    const cache = path.join(home, '.cgraph');
+    fs.mkdirSync(path.join(cache, 'grammars'), { recursive: true });
+    fs.writeFileSync(path.join(cache, 'trusted.json'), '{}');
+    process.env.CGRAPH_HOME = cache;
+
+    const clone = path.join(home, 'code', 'fresh-clone');
+    fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(clone, 'src'), { recursive: true });
+    assert.equal(findProjectRoot(path.join(clone, 'src')), path.resolve(clone),
+      'a git repo under home is its own root');
+
+    const scratch = path.join(home, 'scratch');
+    fs.mkdirSync(scratch, { recursive: true });
+    assert.notEqual(findProjectRoot(scratch), path.resolve(home),
+      'and a plain directory does not become "the home directory project"');
+
+    // Someone who really did index their home directory has an index there,
+    // and that choice is still respected.
+    fs.writeFileSync(path.join(cache, 'index.db'), '');
+    assert.equal(findProjectRoot(scratch), path.resolve(home));
+  } finally {
+    if (priorHome === undefined) delete process.env.CGRAPH_HOME;
+    else process.env.CGRAPH_HOME = priorHome;
     fs.rmSync(base, { recursive: true, force: true });
   }
 });

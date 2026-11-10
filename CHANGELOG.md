@@ -6,6 +6,121 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Search
+- **`find` answers questions, not just name lookups.** It used to score each
+  matching strategy separately and add the results, which works when the query
+  is a name and fails when it is a description: a function about all of
+  "retry failed upload" lost to sixty symbols with "upload" in their name.
+  Every candidate is now scored against the whole query — each word credited
+  once, for the most telling place it appears, weighted by how rare it is in
+  the repository — and scaled by how much of the query it matched. Measured
+  with `npm run bench:search` on llama.cpp, the function a query was built
+  from is in the top five:
+  - from four words of its doc comment: 22% → 99%
+  - from three identifiers used in its body: 3% → 73%
+- **Function bodies are searchable.** The words a function uses — the helpers
+  it calls, the fields it touches, the words in its messages — are indexed,
+  so code can be found by what it does. An identifier that is used but never
+  defined in the index is answered with the functions that use it. This is a
+  sixth column in the full-text index; an existing index is rebuilt once,
+  automatically. Index time and size are within a few percent of before.
+- **Quoted text is searched literally**, and each matching line is reported
+  under the symbol that contains it, with that symbol's line range —
+  `find '"connection refused"'`. A query that matches no symbol is tried as
+  text before giving up. This closes the case that still sent agents to grep:
+  strings, comments, config keys, and files in languages without queries.
+  Smart case; 0.35s across 178 MB on llama.cpp.
+- **Responses are 75–85% smaller.** Measured on the same questions:
+
+  | | before | after |
+  |---|---|---|
+  | `find` an exact name, llama.cpp | 1,351 tok | 297 tok |
+  | `find` an exact name, this repo | 728 tok | 105 tok |
+
+  Three changes. A hit printed its file path twice, once inside the qualified
+  name and once in the location; it is now `path:start-end  kind Name`, and
+  the same goes for caller, callee and impact lists. Locations are line
+  *ranges*, so the definition can be read without reading the file. And the
+  list stops where scores fall well below the best hit instead of always
+  returning twenty; what was left out is counted on the last line, and an
+  explicit `limit` returns everything.
+- Word forms match ("parsing" finds `parseConfig`), filler words in a question
+  are ignored, and keys of object literals written inline in a function no
+  longer outrank the functions and types being looked for.
+- `map symbol=…` says so when the name was ambiguous and names the other
+  candidates, instead of silently answering for the top-ranked one. It also
+  accepts the short form search results print (`Client#connect`).
+
+### Fixed
+- **The home directory could be taken for the project.** The machine-wide
+  cache lives in `~/.cgraph`, the same name as a project's index directory,
+  and project-root detection counted it as one. Once the cache existed — after
+  the first grammar download or `cgraph trust` — any directory under the home
+  directory that had not been initialised resolved to the home directory
+  itself, so `cgraph index` in a fresh clone set about indexing all of it.
+  The cache directory is no longer a project marker unless it actually holds
+  an index. `cgraph init` was unaffected; it takes its root from where it is
+  run.
+- **A `.tsx` file could be indexed with no symbols.** `tsx` is served by the
+  typescript pack, but lazy loading looked for a pack *named* `tsx`, found
+  none, and marked the language unavailable for the rest of the run. In a
+  repository not detected as TypeScript, whether its `.tsx` files got symbols
+  depended on whether the walk reached a `.ts` file first.
+- **Every index run looked like the packs had changed.** The pack fingerprint
+  covered whichever packs were loaded at that moment, and builtins load lazily
+  — so the fingerprint stored at the start of a run never matched the one
+  computed at the start of the next. Each mismatch re-read every file skipped
+  for lack of queries and re-resolved the whole graph: a second full pass
+  after every real change in the MCP server, and again whenever the CLI and
+  the server took turns. The fingerprint now covers what is on disk.
+- **A pending full re-index could be lost.** A migration that needs one set a
+  flag on the Store object of whichever process opened the database first —
+  as often `cgraph find` or the MCP server as the indexer — and the flag died
+  with that process. It is now stored in the database until a full index has
+  actually run.
+- Edges pointing *into* a re-indexed file were meant to be deleted explicitly
+  but the statement ran after its own subquery had been emptied. (Foreign-key
+  cascades removed them anyway; the statement now does what it says.)
+- `_` and `%` in a search query or symbol name were treated as wildcards.
+- The MCP server's freshness scan was throttled at a fixed three seconds. On a
+  very large repository the scan itself takes longer than that, so every
+  spaced-out query waited for one. Scans are now at least five scan-lengths
+  apart.
+
+### Performance
+- **A first index is about six times faster.** Measured on llama.cpp (4,025
+  files, 178 MB) on a 16-thread machine: 19.3s → 3.4s, producing an identical
+  graph. Three separate causes:
+  - Doc-comment lookup rescanned everything above each definition, once per
+    definition — quadratic in file size, and 40% of total index time by
+    itself. Hooks now read upwards only as far as the comment
+    (`linesAbove` / `trimEndIndex`, exported from `cgraph/sdk` for pack
+    authors whose `docComment` hook has the same shape).
+  - Parsing ran on one thread, which is why CPU usage sat near 1/N on an
+    N-core machine. A large index now parses on a pool of threads (cores − 1,
+    up to 8; `--workers <n>` or `workers` in config to change it, `1` to turn
+    it off). Rows are written in dispatch order, so the result is the same
+    whatever the thread count. Incremental updates and the MCP freshness
+    check stay single-threaded — they are too small for threads to pay off.
+  - Files are read ahead asynchronously, unparsed files are written in
+    batches instead of one transaction each, and each parsed file was being
+    cleared twice before it was written.
+- **Re-indexing files that are already indexed no longer scans whole tables.**
+  Deleting a file's old rows searched `trigrams` and `refs` without an index,
+  so updating one file cost more the larger the repository was, and
+  `index --force` on an indexed repository took several times longer than
+  indexing it from empty (4.5s → 0.7s on this repository). Schema v4 adds the
+  two indexes; existing databases migrate on first open. An index opened by
+  this version can no longer be opened by 0.7.0 or earlier.
+
+### Changed
+- `init` and `index` show what they are doing. Progress is reported in named
+  phases — scanning, indexing, resolving, ranking — and the indexing phase
+  draws a bar with a percentage, a rate and a time estimate, because the scan
+  now runs first and supplies the total. Previously it was a bare counter
+  followed by a silent pause while references were resolved, which on a large
+  repository was indistinguishable from a hang. Runs over two seconds end with
+  a line saying where the time went. Nothing is drawn when output is piped.
 
 ## [0.7.0] — 2026-11-10
 ### Security

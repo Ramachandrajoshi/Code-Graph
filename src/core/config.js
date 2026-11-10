@@ -45,7 +45,9 @@ export const DEFAULTS = {
     '**/go.sum',
   ],
 
-  // Parser worker count. 0 means "cpus - 1, at least 1".
+  // Parser threads for a large index. 0 picks automatically (cores - 1, at
+  // most 8); 1 keeps all parsing on the main thread. Small runs — incremental
+  // updates, the MCP freshness check — never start threads regardless.
   workers: 0,
 
   // Label files by which nested `.git` repo they belong to, for a root that

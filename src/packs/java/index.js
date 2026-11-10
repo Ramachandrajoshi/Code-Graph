@@ -5,8 +5,13 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import builtins from './builtins.js';
+import { trimEndIndex } from '../../core/text.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+/** How far above a declaration its annotations can reach. Generous: a long
+ * stack of annotations with arguments is still well under this. */
+const ANNOTATION_WINDOW = 4000;
 
 /** Source roots Maven and Gradle both use; a package maps under one of these. */
 const SOURCE_ROOTS = [
@@ -44,16 +49,19 @@ export default {
 
   /** Javadoc block immediately above, tags stripped. */
   docComment(def, source) {
-    const before = source.slice(0, def.startByte);
-    // Annotations sit between the Javadoc and the declaration.
-    const trimmed = before.replace(/(\s*@\w+(\([^)]*\))?\s*)*$/, '').replace(/\s*$/, '');
-    if (!trimmed.endsWith('*/')) return null;
+    // Annotations sit between the Javadoc and the declaration. Only a bounded
+    // tail is examined: running these patterns over the whole prefix made the
+    // hook quadratic in file size (see core/text.js).
+    const tail = source.slice(Math.max(0, def.startByte - ANNOTATION_WINDOW), def.startByte);
+    const kept = tail.replace(/(\s*@\w+(\([^)]*\))?\s*)*$/, '');
+    const end = trimEndIndex(source, def.startByte - (tail.length - kept.length));
+    if (!source.endsWith('*/', end)) return null;
 
-    const open = trimmed.lastIndexOf('/**');
+    const open = source.lastIndexOf('/**', end - 3);
     if (open === -1) return null;
 
     const prose = [];
-    for (const raw of trimmed.slice(open + 3, trimmed.length - 2).split('\n')) {
+    for (const raw of source.slice(open + 3, end - 2).split('\n')) {
       const line = raw.replace(/^\s*\*\s?/, '').trim();
       if (line.startsWith('@')) break;
       if (line) prose.push(line);

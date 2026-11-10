@@ -138,7 +138,9 @@ export async function resolveGrammar(name, { offline = false, onDownload = null 
 }
 
 async function download(url) {
-  const res = await fetch(url, { redirect: 'follow' });
+  // Bounded: this runs inside an index, and a CDN that accepts the connection
+  // and then stalls would otherwise hang the agent's query indefinitely.
+  const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(60000) });
   if (!res.ok) {
     throw new Error(`Failed to download grammar: ${res.status} ${res.statusText} (${url})`);
   }

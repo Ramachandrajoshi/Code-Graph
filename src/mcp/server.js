@@ -21,6 +21,21 @@ import { search, renderHits, suggestSymbols, formatSuggestions, indexIsEmpty } f
 import { callers, callees, importers, impact, shortestPath, hydrate } from '../core/graph.js';
 import { degree } from '../core/rank.js';
 import { UsageLedger, fitToBudget } from '../core/tokens.js';
+import { isTrusted } from '../core/trust.js';
+
+/**
+ * Sent once in the `initialize` result.
+ *
+ * Clients that defer tool schemas (Claude Code's tool search) keep this in
+ * context INSTEAD of the schemas and use it to decide when to load them — so it
+ * is the only thing standing between the agent and its grep reflex until then.
+ * It names the trigger and the two tools, and stops: every word is paid for in
+ * every session, whether or not a tool is ever called.
+ */
+const INSTRUCTIONS =
+  'Code graph of this repository. To locate a symbol use `find`, not grep. To see what a file ' +
+  'or directory contains, or what calls / is called by / is affected by a symbol, use `map`, ' +
+  'not ls, glob or reading the file. Both return exact file:line locations.';
 
 export async function createServer({ root, version }) {
   const config = loadConfig(root ?? process.cwd(), root ? { root } : {});
@@ -30,7 +45,12 @@ export async function createServer({ root, version }) {
 
   const handlers = {
     async listTools() {
-      return toolDefinitions({ embeddingsEnabled: config.embeddings?.enabled });
+      // Listed only when it can actually run: embeddings settings come from the
+      // project, so an untrusted project does not get to advertise the tool
+      // (see core/trust.js) — and its schema costs nothing meanwhile.
+      return toolDefinitions({
+        embeddingsEnabled: Boolean(config.embeddings?.enabled) && isTrusted(config.root),
+      });
     },
 
     async callTool(name, args) {
@@ -40,8 +60,8 @@ export async function createServer({ root, version }) {
         await refresher.maybe();
 
         switch (name) {
-          case 'map':    return toolMap(store, config, args, ledger);
-          case 'find':   return toolFind(store, config, args, ledger);
+          case 'map':    return toolMap(store, config, withCeiling(args, config), ledger);
+          case 'find':   return toolFind(store, config, withCeiling(args, config), ledger);
           case 'similar': return await toolSimilar(store, config, args);
           default:
             return errorResult(`Unknown tool '${name}'.`);
@@ -52,7 +72,7 @@ export async function createServer({ root, version }) {
     },
   };
 
-  const server = new StdioServer({ name: 'cgraph', version, handlers });
+  const server = new StdioServer({ name: 'cgraph', version, handlers, instructions: INSTRUCTIONS });
   return { server, store, config, refresher };
 }
 
@@ -122,12 +142,20 @@ class Refresher {
 // ---------------------------------------------------------------- tools
 
 // Unlike the CLI (where config.defaultBudget keeps terminal output sane by
-// default), MCP responses are uncapped unless the caller passes `budget`
-// explicitly. A model that gets a silently shortened answer treats it as
-// complete and stops looking — that costs far more than the tokens a default
-// cap would have saved.
+// default), MCP responses are not trimmed for brevity: a model that gets a
+// silently shortened answer treats it as complete and stops looking, which
+// costs far more than the tokens saved. The only default limit is the safety
+// ceiling (config.maxResponseTokens), set where the client would otherwise
+// truncate for us without saying so — and every cut it makes is announced.
 function budgetOf(args) {
   return args.budget ?? null;
+}
+
+/** Apply the response ceiling when the caller chose no budget of their own. */
+function withCeiling(args, config) {
+  if (args?.budget !== undefined && args?.budget !== null) return args;
+  const ceiling = config.maxResponseTokens;
+  return ceiling > 0 ? { ...args, budget: ceiling } : args;
 }
 
 function toolMap(store, config, args, ledger) {

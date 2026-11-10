@@ -108,13 +108,16 @@ function installOne(hooksDir, name, config) {
  * on every merge gets uninstalled within a day. Failure is swallowed for the
  * same reason — a stale index must never make a git command look broken.
  */
-function hookBody(root) {
-  const rootArg = root.replace(/\\/g, '/');
+export function hookBody(root) {
+  // Single-quoted, with any embedded quote closed, escaped and reopened. A
+  // directory name is not ours to choose, and inside double quotes a `$(...)`
+  // or a backtick in one would be executed by every checkout, merge and rebase.
+  const rootArg = "'" + root.replace(/\\/g, '/').replace(/'/g, "'\\''") + "'";
   return `${MARK_START}
 # Pre-warms the cgraph index so the next agent query does not pay for it.
 # Backgrounded and silent by design: this must never delay or fail a git command.
 # Remove with: cgraph hooks uninstall
-command -v cgraph >/dev/null 2>&1 && (cgraph update --quiet --root "${rootArg}" >/dev/null 2>&1 &)
+command -v cgraph >/dev/null 2>&1 && (cgraph update --quiet --root ${rootArg} >/dev/null 2>&1 &)
 ${MARK_END}`;
 }
 

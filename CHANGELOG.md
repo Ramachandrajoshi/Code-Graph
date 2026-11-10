@@ -6,6 +6,62 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- **Project packs and project embeddings settings now need `cgraph trust`.**
+  A pack under `.cgraph/packs/` or `node_modules/cgraph-pack-*` is JavaScript
+  that was imported — executed — on every index, including the automatic
+  refresh the MCP server runs before each tool call. Opening a cloned
+  repository with an agent was therefore enough to run whatever that
+  repository committed. Likewise `.cgraph/config.json` could enable embeddings
+  with a `baseUrl` and `apiKeyEnv` of the repository's choosing, sending any
+  environment variable to any host as a bearer token. Neither is used until
+  the project is trusted; what was held back is named on stderr. The decision
+  is stored in `~/.cgraph/trusted.json`, outside the project, so a repository
+  cannot grant it to itself. Builtin packs and `~/.cgraph/packs/` are
+  unaffected. **Breaking** for existing project packs and embeddings: run
+  `cgraph trust` once per project, or set `CGRAPH_TRUST=1` in CI.
+- `init` no longer writes `enableAllProjectMcpServers: true` into the
+  checked-in `.claude/settings.json`. That approved, for every clone and
+  without a prompt, any server later added to `.mcp.json`. Only `cgraph` is
+  approved now, by name. An existing `true` is left as it is — remove it by
+  hand if you did not set it yourself.
+- `init` pre-approves only the tools the server exposes (`map`, `find`), not
+  the removed `status`, `read` and `graph`.
+- The git hook single-quotes the project path. A directory name containing
+  `$(...)` or a backtick was executed on every checkout, merge and rebase.
+  Re-run `cgraph hooks uninstall && cgraph hooks install` to rewrite hooks
+  installed by an earlier version.
+- A file path read back from the index can no longer resolve outside the
+  project root (`cgraph read` against a pre-built, committed index).
+- Grammar downloads time out after 60 seconds instead of hanging the index.
+- CI runs with a read-only token, and `prepare-release` passes its inputs to
+  the shell as environment variables rather than interpolating them.
+
+### Fixed
+- **The registered MCP server failed to start unless `cgraph` was installed
+  globally**, and always failed that way on Windows, where the global command
+  is a `.cmd` shim that cannot be spawned without a shell. The only symptom
+  was the agent reporting "connection closed". `init` now writes a bare
+  `cgraph` only where it resolves (through `cmd /c` on Windows) and otherwise
+  this Node binary plus the absolute path of the script. Re-running `init`
+  repairs an entry an earlier version wrote; customised entries are untouched.
+
+### Changed
+- **Outlines hide object-literal fields that sit inside functions** — inline
+  option objects and returned literals such as `{ recursive: true }`. They were
+  a third to a half of a typical JavaScript outline and none of its structure.
+  A footer counts what was hidden, and `kinds: ["field"]` lists them. Members
+  of module-level objects and of classes are shown as before.
+- MCP responses stop at 10,000 tokens when the caller passes no `budget`
+  (`maxResponseTokens`; `0` disables). Ordinary answers are nowhere near it;
+  it exists so that a huge outline is cut here, loudly and with a count,
+  instead of by the client, which drops the result without saying what was
+  lost. An explicit `budget` overrides it in either direction.
+- The server sends short `instructions` at initialize, which clients that
+  defer tool schemas keep in context to decide when to load the tools, and
+  marks every tool `readOnlyHint` so calls can run in parallel and unprompted.
+- The instruction block written into `CLAUDE.md` / `AGENTS.md` is about 40%
+  smaller. It is loaded into every session, used or not.
 
 ## [0.6.0] — 2026-11-08
 

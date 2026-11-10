@@ -11,6 +11,8 @@
  * the NAME of the environment variable holding it.
  */
 
+import { isTrusted } from '../core/trust.js';
+
 /**
  * Providers we know how to call. Each maps to a plain HTTP request.
  *
@@ -91,6 +93,21 @@ export class Embedder {
   static fromConfig(config) {
     const e = config.embeddings;
     if (!e?.enabled) return null;
+
+    // These settings come from a file inside the project, and they decide where
+    // source text is sent and which environment variable is sent along with it
+    // as a bearer token. A cloned repository must not get to make that choice:
+    // `apiKeyEnv: "GITHUB_TOKEN"` plus a `baseUrl` of its own is a credential
+    // exfiltration, triggered by nothing more than a search. A config with no
+    // `root` was built in code by the caller, not read from a project.
+    if (config.root && !isTrusted(config.root)) {
+      throw new Error(
+        'Embeddings are enabled in .cgraph/config.json, but this project is not trusted.\n' +
+        'That file decides where code is sent and which credential goes with it.\n' +
+        'Check `embeddings.baseUrl` and `embeddings.apiKeyEnv`, then run `cgraph trust`.'
+      );
+    }
+
     if (!e.provider) throw new Error('embeddings.enabled is true but embeddings.provider is not set');
 
     const spec = PROVIDERS[e.provider];

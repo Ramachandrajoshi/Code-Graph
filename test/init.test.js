@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -61,9 +61,25 @@ test('registers an MCP server in .mcp.json', opts, () => {
   try {
     init(root);
     const mcp = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8'));
-    assert.ok(mcp.mcpServers['cgraph'], 'server registered');
-    assert.equal(mcp.mcpServers['cgraph'].command, 'cgraph');
-    assert.ok(mcp.mcpServers['cgraph'].args.includes('serve'));
+    const entry = mcp.mcpServers['cgraph'];
+    assert.ok(entry, 'server registered');
+    assert.ok(entry.args.includes('serve'));
+
+    // The property that matters, and the one a shape check cannot see: the
+    // entry must START. It is launched here exactly the way an agent does it —
+    // no shell, the command and args as written — and has to answer the
+    // handshake. Asserting `command === 'cgraph'` instead passed for as long as
+    // the registered command could not be found by any agent that had not
+    // installed cgraph globally, which surfaced only as "connection closed".
+    const res = spawnSync(entry.command, entry.args, {
+      encoding: 'utf8',
+      input: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } },
+      }) + '\n',
+    });
+    assert.equal(res.error, undefined, `the registered command could not be spawned: ${res.error?.message}`);
+    assert.equal(JSON.parse(res.stdout.trim()).result.serverInfo.name, 'cgraph', res.stderr);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

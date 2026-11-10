@@ -120,8 +120,8 @@ Returns definitions with exact locations, ranked by importance — not line hits
 - Use your own file reader for full-file or line-range reads: \`map\`/\`find\`
   index definitions, calls, and imports — not plain text. Fall back to grep for
   string literals and comments.
-- \`--budget <n>\` caps a response's tokens when you need a bound; uncapped by
-  default.
+- \`--budget <n>\` caps a response's tokens. A truncated answer always says
+  so and counts what it dropped — narrow the path or raise the budget.
 `;
 }
 

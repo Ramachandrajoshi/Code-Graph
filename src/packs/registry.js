@@ -22,6 +22,7 @@ import { extract } from '../core/extract.js';
 import { detectLanguage, languageById } from './languages.js';
 import { detectTechnologies } from './technologies.js';
 import { userCacheDir } from '../core/config.js';
+import { isTrusted } from '../core/trust.js';
 
 // Order matters: later packs override earlier ones for languages they share.
 // `javascript` must follow `typescript` so it wins the `javascript` binding.
@@ -50,8 +51,18 @@ export class PackRegistry {
    *   project appears to use. Only for tooling that must describe the full set,
    *   such as `cgraph packs list`.
    */
-  static async load(config, { allPacks = false } = {}) {
+  static async load(config, { allPacks = false, trusted = isTrusted(config.root) } = {}) {
     const packs = new Map();
+    const external = discoverExternal(config, trusted);
+
+    if (external.blocked.length) {
+      // Loud, because the alternative reads as "my pack does nothing": the
+      // files are there, the index runs, and no symbols appear.
+      process.emitWarning(
+        `cgraph: not loading ${external.blocked.join(', ')} — packs inside a project are ` +
+        'code, and this project is not trusted to run code. Review them, then run `cgraph trust`.'
+      );
+    }
 
     // What is this project built with? Manifests answer that before a single
     // source file is read, so a .NET repository never loads the Python pack —
@@ -61,7 +72,7 @@ export class PackRegistry {
 
     const sources = [
       ...BUILTIN.map((id) => ({ dir: new URL(`./${id}/`, import.meta.url), origin: `builtin:${id}`, builtin: id })),
-      ...discoverExternal(config),
+      ...external.found,
     ];
 
     for (const src of sources) {
@@ -95,6 +106,7 @@ export class PackRegistry {
 
     const registry = new PackRegistry({ config, packs, host });
     registry.technologies = technologies;
+    registry.blockedPacks = external.blocked;
     registry.lazy = !allPacks;
     registry.strict = config.packs?.strict ?? false;
     return registry;
@@ -331,16 +343,26 @@ export class PackRegistry {
   }
 }
 
-function discoverExternal(config) {
+/**
+ * Packs outside the builtins.
+ *
+ * The two sources that live under the project root are only loaded for a
+ * trusted project (see core/trust.js): importing a pack executes it, and a
+ * cloned repository must not get to run code merely by being indexed. Packs in
+ * the user's own cache directory were put there by the user and always load.
+ * What was held back is returned too, so the caller can say so.
+ */
+function discoverExternal(config, trusted) {
   const found = [];
+  const blocked = [];
 
   const dirs = [
-    { base: path.join(config.root, 'node_modules'), prefixed: true, label: 'node_modules' },
-    { base: path.join(userCacheDir(), 'packs'), prefixed: false, label: 'user' },
-    { base: path.join(config.dir, 'packs'), prefixed: false, label: 'project' },
+    { base: path.join(config.root, 'node_modules'), prefixed: true, label: 'node_modules', inProject: true },
+    { base: path.join(userCacheDir(), 'packs'), prefixed: false, label: 'user', inProject: false },
+    { base: path.join(config.dir, 'packs'), prefixed: false, label: 'project', inProject: true },
   ];
 
-  for (const { base, prefixed, label } of dirs) {
+  for (const { base, prefixed, label, inProject } of dirs) {
     let entries;
     try {
       entries = fs.readdirSync(base, { withFileTypes: true });
@@ -352,14 +374,17 @@ function discoverExternal(config) {
       if (!entry.isDirectory()) continue;
       if (prefixed && !entry.name.startsWith('cgraph-pack-')) continue;
 
-      found.push({
-        dir: pathToFileURL(path.join(base, entry.name) + path.sep),
-        origin: `${label}:${entry.name}`,
-      });
+      const origin = `${label}:${entry.name}`;
+      if (inProject && !trusted) {
+        blocked.push(origin);
+        continue;
+      }
+
+      found.push({ dir: pathToFileURL(path.join(base, entry.name) + path.sep), origin });
     }
   }
 
-  return found;
+  return { found, blocked };
 }
 
 async function importPack({ dir, origin }) {

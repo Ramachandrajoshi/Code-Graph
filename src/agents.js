@@ -20,6 +20,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Known agents.
@@ -116,7 +117,7 @@ export function selectAgents(root, spec) {
  * may have customised the command, and silently replacing it is the kind of
  * thing that destroys trust in a tool that edits your config.
  */
-export function registerMcp(root, agentId, { serverName = 'cgraph', explicit = false } = {}) {
+export function registerMcp(root, agentId, { serverName = 'cgraph', explicit = false, launch = launchCommand() } = {}) {
   const agent = AGENTS[agentId];
   const spec = agent.mcp;
   const file = path.join(root, spec.file);
@@ -140,15 +141,79 @@ export function registerMcp(root, agentId, { serverName = 'cgraph', explicit = f
   }
 
   json[spec.key] ??= {};
-  if (json[spec.key][serverName]) {
-    return { file: spec.file, label: agent.label, status: 'exists' };
+  const existing = json[spec.key][serverName];
+  let status = 'created';
+
+  if (existing) {
+    // A customised entry is the user's and is never touched. The one exception
+    // is the entry an older cgraph wrote itself — a bare `cgraph` — when that
+    // command cannot be launched from here: leaving it means the agent reports
+    // "connection closed" on every start and nobody learns why.
+    const repairable = isStockEntry(existing) && launch[0] !== 'cgraph';
+    if (!repairable) return { file: spec.file, label: agent.label, status: 'exists' };
+    status = 'repaired';
   }
 
-  json[spec.key][serverName] = serverEntry(spec.shape, root);
+  json[spec.key][serverName] = serverEntry(spec.shape, root, launch);
 
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(file, JSON.stringify(json, null, 2) + '\n');
-  return { file: spec.file, label: agent.label, status: 'created' };
+  return { file: spec.file, label: agent.label, status };
+}
+
+/** True for the exact entry older versions generated: a bare `cgraph serve`. */
+function isStockEntry(entry) {
+  if (Array.isArray(entry?.command)) {
+    return entry.command[0] === 'cgraph' && entry.command[1] === 'serve';
+  }
+  return entry?.command === 'cgraph' && entry.args?.[0] === 'serve';
+}
+
+const BIN_PATH = fileURLToPath(new URL('../bin/cgraph.js', import.meta.url));
+
+/**
+ * The argv prefix that starts cgraph from an agent's process, as an array.
+ *
+ * Agents spawn MCP servers directly, with no shell and with their own PATH —
+ * not the one `cgraph init` happened to run under. Three ways a bare `cgraph`
+ * fails there, each surfacing only as an opaque "connection closed":
+ *
+ *   - it was never installed globally (run from a checkout, or via `npx`)
+ *   - it is on PATH only through `node_modules/.bin`, which npm adds for the
+ *     duration of a script and the agent never sees
+ *   - on Windows the global command is a `.cmd` shim, which cannot be spawned
+ *     without a shell
+ *
+ * So: a bare `cgraph` only where it will really resolve (through `cmd /c` on
+ * Windows), and otherwise this node binary plus the absolute path of the
+ * script — which cannot fail to resolve for as long as the install exists.
+ */
+export function launchCommand({
+  platform = process.platform,
+  onPath = cgraphOnPath(),
+  execPath = process.execPath,
+  binPath = BIN_PATH,
+} = {}) {
+  if (onPath) return platform === 'win32' ? ['cmd', '/c', 'cgraph'] : ['cgraph'];
+  return [execPath, binPath].map((p) => p.replace(/\\/g, '/'));
+}
+
+/** Is a `cgraph` command on a PATH entry the agent will also have? */
+function cgraphOnPath() {
+  const names = process.platform === 'win32'
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((ext) => `cgraph${ext}`)
+    : ['cgraph'];
+
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    // npm prepends these for the lifetime of one script or `npx` call.
+    if (!dir || /node_modules[\\/]\.bin[\\/]?$/.test(dir)) continue;
+    for (const name of names) {
+      try {
+        if (fs.statSync(path.join(dir, name)).isFile()) return true;
+      } catch { /* not here */ }
+    }
+  }
+  return false;
 }
 
 /**
@@ -158,27 +223,24 @@ export function registerMcp(root, agentId, { serverName = 'cgraph', explicit = f
  * unpredictable working directory; without it the server resolves the nearest
  * index from wherever the agent happened to launch.
  */
-function serverEntry(shape, root) {
-  const rootArg = root.replace(/\\/g, '/');
+function serverEntry(shape, root, launch) {
+  const argv = [...launch, 'serve', '--root', root.replace(/\\/g, '/')];
 
   if (shape === 'opencode') {
     // opencode takes one flat command array and needs an explicit type.
-    return {
-      type: 'local',
-      command: ['cgraph', 'serve', '--root', rootArg],
-      enabled: true,
-    };
+    return { type: 'local', command: argv, enabled: true };
   }
 
-  return { command: 'cgraph', args: ['serve', '--root', rootArg] };
+  return { command: argv[0], args: argv.slice(1) };
 }
 
 // ---------------------------------------------------------------- Claude settings
 
 const CLAUDE_SETTINGS_FILE = '.claude/settings.json';
-const CLAUDE_TOOLS = ['status', 'map', 'find', 'read', 'graph'].map(
-  (t) => `mcp__cgraph__${t}`
-);
+// Exactly the tools the server exposes (see mcp/tools.js). A pre-approval for a
+// tool that does not exist is not harmless: it is a standing grant that a
+// future tool of that name would inherit without anyone deciding it should.
+const CLAUDE_TOOLS = ['map', 'find'].map((t) => `mcp__cgraph__${t}`);
 
 /**
  * Pre-approve the cgraph MCP server and its tools in Claude Code's shared,
@@ -192,9 +254,14 @@ const CLAUDE_TOOLS = ['status', 'map', 'find', 'read', 'graph'].map(
  * gitignored `settings.local.json`) means every clone and every subagent
  * starts pre-approved, not just the developer who ran `init`.
  *
- * Additive only: an explicit `enableAllProjectMcpServers: false` a user set
- * on purpose is left alone, and existing permissions/servers are never
- * removed, only added to.
+ * Scoped to this one server by name. `enableAllProjectMcpServers` would also
+ * work, and is deliberately NOT written: in a checked-in file it approves
+ * every server anyone later adds to `.mcp.json`, for every clone, with no
+ * prompt — one pull request away from running an arbitrary command on each
+ * contributor's machine. Whatever value the user already has there is theirs
+ * and is left alone.
+ *
+ * Additive only: existing permissions and servers are never removed.
  */
 export function writeClaudeSettings(root, { serverName = 'cgraph' } = {}) {
   const file = path.join(root, CLAUDE_SETTINGS_FILE);
@@ -210,11 +277,6 @@ export function writeClaudeSettings(root, { serverName = 'cgraph' } = {}) {
   }
 
   let changed = false;
-
-  if (json.enableAllProjectMcpServers === undefined) {
-    json.enableAllProjectMcpServers = true;
-    changed = true;
-  }
 
   json.enabledMcpjsonServers ??= [];
   if (!json.enabledMcpjsonServers.includes(serverName)) {
@@ -255,33 +317,20 @@ export function instructionBlock() {
   return `${MARK_START}
 ## Code navigation: use cgraph, not grep
 
-This repository has a cgraph index. Use it — not just shell search — whenever
-you haven't already pinpointed the lines you need; it returns exact locations
-instead of whole files. \`map\` takes either a \`path\` (outline) or a \`symbol\`
-(relationships), never both.
+This repo has a cgraph index. Unless you already know the exact lines you need:
 
-| Instead of | Use | Returns |
-|---|---|---|
-| \`ls\`, \`glob\`, opening a file to see what's in it | \`map\` (path) | symbol outline with line numbers |
-| grepping/searching for a symbol | \`find\` | ranked definitions; matches camelCase parts, so "login" finds "handleLogin" |
-| — no shell equivalent — | \`map\` (symbol) | callers, callees, transitive impact, call paths |
+- \`find <name>\` instead of grep for a symbol: ranked definitions with exact
+  locations. Matches camelCase parts ("login" finds "handleLogin").
+- \`map <path>\` instead of ls/glob or opening a file: a symbol outline with
+  line numbers, a fraction of the file's size. Then read only those lines.
+- \`map <symbol>\` for callers, callees and call paths. Use \`direction=impact\`
+  before changing anything shared.
 
-Working rules:
-
-- Call \`map\` on a file before opening it: an outline is a fraction of the
-  file's size and tells you which symbol is worth reading in full.
-- Before changing anything shared, call \`map\` on the symbol with
-  \`direction=impact\` to see what depends on it.
-- Edges marked \`!\` are **inferred** from a name match, not proven through an
-  import. Verify before relying on them.
-- The index refreshes itself before every call; if it still looks stale, run
-  \`cgraph update\`.
-- Use your own reader for whole-file or line-range reads; \`find\`/\`map\` only
-  index definitions and call/import edges, not plain text — fall back to grep
-  for that.
-
-The same data is available from the shell, which also keeps \`read\` and
-\`graph\` as separate commands: \`cgraph map|find|graph|read\`.
+\`map\` takes a \`path\` or a \`symbol\`, never both. Edges marked \`!\` are
+**inferred** from a name match, not proven — verify them. Only definitions and
+call/import edges are indexed: use grep for plain text and your own reader for
+file contents. The index refreshes itself; \`cgraph update\` forces it. Without
+the MCP tools, the shell has the same data: \`cgraph map|find|graph|read\`.
 ${MARK_END}`;
 }
 

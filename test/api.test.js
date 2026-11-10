@@ -66,7 +66,9 @@ async function openRaw(files) {
     deps: { ...DEFAULTS.deps, offline: true },
   };
   const store = await Store.open(config.db);
-  const registry = await PackRegistry.load(config);
+  // The test wrote this tree itself, so it may run the packs inside it; a real
+  // project needs `cgraph trust` first (see test/trust.test.js).
+  const registry = await PackRegistry.load(config, { trusted: true });
   return {
     root, store, registry, config,
     // Minimal node lookup mirroring test/fixture.js: name -> row, or null.

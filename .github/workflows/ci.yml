@@ -12,6 +12,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only. This workflow runs `npm ci` and the test suite on pull requests,
+# which is code from whoever opened the PR; without this block the token it
+# runs with takes the repository default, which may be read-write.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: test (node ${{ matrix.node }}, ${{ matrix.os }})

@@ -22,7 +22,7 @@ import { PackRegistry } from '../../packs/registry.js';
 import { detectSubprojectTechnologies } from '../../packs/technologies.js';
 import {
   AGENTS, AGENT_IDS, selectAgents, registerMcp, writeInstructions, instructionFilesFor,
-  writeClaudeSettings,
+  writeClaudeSettings, launchCommand,
 } from '../../agents.js';
 import { installSkill } from '../../skills.js';
 import { out, color, Progress, toks, duration } from '../ui.js';
@@ -135,12 +135,14 @@ export async function run(args) {
   for (const r of mcpResults) {
     const tag = {
       created: color.green('created'),
+      repaired: color.green('updated'),
       exists: color.dim('exists '),
       skipped: color.dim('skipped'),
       unparseable: color.yellow('skipped'),
     }[r.status];
     const note = r.status === 'unparseable' ? ' (not valid JSON; left alone)'
       : r.status === 'skipped' ? ' (not in use here)'
+      : r.status === 'repaired' ? ' (`cgraph` is not on PATH; now launched by absolute path)'
       : '';
     out(`  ${tag}   ${r.file}${note ? color.dim(note) : ''}  ${color.dim(r.label)}`);
   }
@@ -176,12 +178,13 @@ export async function run(args) {
   }
 
   out('');
-  const registered = mcpResults.filter((r) => r.status === 'created');
+  const registered = mcpResults.filter((r) => r.status === 'created' || r.status === 'repaired');
   if (registered.length) {
     out('  Restart your agent to pick up the MCP server.');
   } else if (!agentIds.length && !skipMcp) {
+    const [command, ...rest] = [...launchCommand(), 'serve', '--root', root.replace(/\\/g, '/')];
     out('  No agent detected. Register manually, or re-run with --agent <name>:');
-    out(color.dim(`    { "command": "cgraph", "args": ["serve", "--root", "${root.replace(/\\/g, '/')}"] }`));
+    out(color.dim(`    ${JSON.stringify({ command, args: rest })}`));
   } else if (!registered.length) {
     out(color.dim('  All agent configs were already registered.'));
   }

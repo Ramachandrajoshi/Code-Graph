@@ -49,16 +49,23 @@ jobs:
 
       - name: Bump version
         id: bump
+        # Inputs reach the script as environment variables, never by `${{ }}`
+        # interpolation: that pastes the text into the script before the shell
+        # parses it, so a free-form `preid` of `x"; curl ... #` would run with
+        # this job's write token.
+        env:
+          BUMP: ${{ inputs.bump }}
+          PREID: ${{ inputs.preid }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # --no-git-tag-version: the tag is created after review, not now.
           # Tagging here would publish whatever is on the branch, unreviewed.
-          if [[ "${{ inputs.bump }}" == pre* ]]; then
-            npm version "${{ inputs.bump }}" --preid "${{ inputs.preid }}" --no-git-tag-version
+          if [[ "$BUMP" == pre* ]]; then
+            npm version "$BUMP" --preid "$PREID" --no-git-tag-version
           else
-            npm version "${{ inputs.bump }}" --no-git-tag-version
+            npm version "$BUMP" --no-git-tag-version
           fi
 
           VERSION="$(node -p "require('./package.json').version")"
@@ -98,18 +105,21 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version }}
 
       - name: Commit to a release branch
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
         run: |
-          git checkout -b "${{ steps.bump.outputs.branch }}"
+          git checkout -b "$BRANCH"
           git add package.json package-lock.json CHANGELOG.md
-          git commit -m "Release v${{ steps.bump.outputs.version }}"
-          git push --force origin "${{ steps.bump.outputs.branch }}"
+          git commit -m "Release v$VERSION"
+          git push --force origin "$BRANCH"
 
       - name: Open the pull request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
         run: |
-          VERSION="${{ steps.bump.outputs.version }}"
-          BRANCH="${{ steps.bump.outputs.branch }}"
 
           BODY=$(cat <<EOF
           Prepares **v$VERSION**.

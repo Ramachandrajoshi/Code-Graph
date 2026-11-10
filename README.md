@@ -79,6 +79,7 @@ cgraph watch             Keep the index fresh automatically
 cgraph doctor            Resolution quality and coverage gaps
 cgraph stats             Index size and what queries have cost
 cgraph packs             Inspect or scaffold language packs
+cgraph trust             Allow this project's own packs and embeddings to run
 cgraph skill install     Add cgraph as a discoverable Agent Skill
 ```
 
@@ -185,6 +186,16 @@ If your agent isn't listed, register it as a stdio MCP server:
 
 ```json
 { "command": "cgraph", "args": ["serve", "--root", "/absolute/path/to/repo"] }
+```
+
+That assumes `cgraph` is on the PATH your agent runs with. If it is not — it
+was never installed globally, or this is Windows, where the global command is
+a `.cmd` shim an agent cannot spawn directly — the server fails to start and
+the agent reports only "connection closed". Launch it by absolute path instead,
+which is what `cgraph init` writes for you in that situation:
+
+```json
+{ "command": "node", "args": ["/path/to/cgraph/bin/cgraph.js", "serve", "--root", "/absolute/path/to/repo"] }
 ```
 
 `--root` is not optional in practice: agents launch MCP servers with an
@@ -318,6 +329,15 @@ export default {
 
 Packs are discovered from, in increasing precedence: builtins,
 `node_modules/cgraph-pack-*`, `~/.cgraph/packs/`, `.cgraph/packs/`.
+
+A pack is code, and loading one runs it. The two locations inside a project
+are therefore ignored until you run `cgraph trust` there, so that indexing a
+repository you just cloned can never execute something it committed. The same
+switch covers embeddings settings in `.cgraph/config.json`, which choose where
+code is sent and which environment variable goes with it as the key.
+`cgraph trust status` shows what trusting a project would enable; the decision
+lives in `~/.cgraph/trusted.json`, outside the project. In CI, set
+`CGRAPH_TRUST=1`.
 
 Upstream tree-sitter grammars ship a `queries/tags.scm` using the same capture
 vocabulary, so they can usually be vendored with minimal edits.

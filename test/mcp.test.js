@@ -195,6 +195,79 @@ test('the budget estimator does not under-bill non-ASCII responses', () => {
   assert.equal(estimate('a'.repeat(40)), 12, 'ASCII estimate must not regress');
 });
 
+test('every tool is declared read-only', () => {
+  // Nothing here writes outside the index. Saying so is what lets a client run
+  // calls in parallel and skip the approval prompt — without it a subagent with
+  // nobody to click "allow" loses the tools and falls back to grep.
+  for (const tool of toolDefinitions({ embeddingsEnabled: true })) {
+    assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name} must declare readOnlyHint`);
+  }
+});
+
+test('initialize carries short server instructions', opts, async () => {
+  // A client that defers tool schemas keeps THIS in context instead of them and
+  // uses it to decide when to load the tools. Absent, nothing tells the agent
+  // the graph exists; long, it is a tax on every session that never calls it.
+  const fx = await buildFixture(REPO);
+  try {
+    const { responses } = await session(fx.root, [INIT]);
+    const text = responses.find((r) => r.id === 1).result.instructions;
+    assert.match(text, /find/);
+    assert.match(text, /map/);
+    assert.match(text, /grep/, 'names the reflex it replaces');
+    assert.ok(estimate(text) < 90, `server instructions cost ${estimate(text)} tokens; budget is 90`);
+  } finally { fx.cleanup(); }
+});
+
+test('an outline hides object-literal fields inside functions, and says so', opts, async () => {
+  // Measured on this repository: these were a third to a half of every
+  // JavaScript outline — `recursive: true`, `status: 'created'` — and none of
+  // the structure. They must go by default, be counted (truncate loudly), come
+  // back on request, and never take a real member of an object with them.
+  const fx = await buildFixture({
+    'package.json': '{"name":"t"}',
+    'src/a.js': [
+      "export const API = { timeout: 30, retry: { max: 3 } };",
+      "export function make(dir) {",
+      "  mkdir(dir, { recursive: true });",
+      "  return { status: 'created', meta: { dir } };",
+      "}",
+      '',
+    ].join('\n'),
+  });
+  try {
+    const text = (await toolCall(fx.root, 'map', { path: 'src/a.js' })).content[0].text;
+    assert.match(text, /make\(dir\)/);
+    assert.match(text, /timeout/, 'members of a module-level object are structure and stay');
+    assert.match(text, /max/, 'including nested ones');
+    assert.ok(!/recursive/.test(text), 'an inline options literal is not');
+    assert.ok(!/status/.test(text), 'nor a returned literal');
+    assert.match(text, /\(\+\d+ object-literal fields inside functions; kinds \["field"\] lists them\)/);
+
+    const fields = (await toolCall(fx.root, 'map', { path: 'src/a.js', kinds: ['field'] })).content[0].text;
+    assert.match(fields, /recursive/, 'asking for fields shows all of them');
+    assert.match(fields, /status/);
+  } finally { fx.cleanup(); }
+});
+
+test('a response past the safety ceiling is cut loudly; an explicit budget overrides it', opts, async () => {
+  // The client has its own limit and enforces it by dropping the result, after
+  // the tokens are spent and without saying what was lost. Ours must trip
+  // first, and must say so. 2500 symbols is ~18k tokens of outline.
+  const many = Array.from({ length: 2500 }, (_, i) => `export function fn${i}() { return ${i}; }`).join('\n');
+  const fx = await buildFixture({ 'package.json': '{"name":"t"}', 'src/huge.js': many + '\n' });
+  try {
+    const text = (await toolCall(fx.root, 'map', { path: 'src/huge.js' })).content[0].text;
+    assert.match(text, /fn0\(/);
+    assert.ok(!/fn2499\(/.test(text), 'the tail is cut');
+    assert.match(text, /\d+ more symbols \(raise --budget to see them\)/, 'and the cut is announced with a count');
+    assert.ok(estimate(text) < 11000, `default response is ${estimate(text)} tokens; the ceiling is 10000`);
+
+    const all = (await toolCall(fx.root, 'map', { path: 'src/huge.js', budget: 100000 })).content[0].text;
+    assert.match(all, /fn2499\(/, 'a caller who asks for more gets it');
+  } finally { fx.cleanup(); }
+});
+
 test('exposes exactly the intended tool set', () => {
   const names = toolDefinitions({}).map((t) => t.name);
   assert.deepEqual(names, ['map', 'find']);

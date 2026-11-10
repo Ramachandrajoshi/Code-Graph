@@ -32,9 +32,21 @@ export function relFromRoot(root, abs) {
   return toPosix(rel);
 }
 
-/** Absolute native path for a repo-relative POSIX path. */
+/**
+ * Absolute native path for a repo-relative POSIX path.
+ *
+ * Throws when the result would land outside `root`. The paths passed here come
+ * out of the index, and the index is a file in the project directory — one a
+ * repository can ship pre-built. A row whose path is `../../.ssh/id_rsa` must
+ * not turn "read this symbol" into "print that file".
+ */
 export function absFromRoot(root, rel) {
-  return path.join(root, toNative(rel));
+  const abs = path.resolve(root, toNative(rel));
+  const back = path.relative(path.resolve(root), abs);
+  if (back.startsWith('..') || path.isAbsolute(back)) {
+    throw Object.assign(new Error(`path escapes the project root: ${rel}`), { code: 'EOUTSIDE' });
+  }
+  return abs;
 }
 
 /**

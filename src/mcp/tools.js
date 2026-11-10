@@ -22,10 +22,10 @@
  * between two similarly-described tools is exactly the ambiguity a single
  * tool with two clearly-named modes avoids.
  *
- * Responses are not truncated by default — see `budget` on `map`/`find`: it is
- * an opt-in cap, not a silent one. An agent that gets a partial answer without
- * asking for one stops looking too early, which costs far more than the
- * tokens the cap would have saved.
+ * Responses are not trimmed for brevity — an agent that gets a partial answer
+ * without asking for one stops looking too early, which costs far more than
+ * the tokens saved. `budget` is the caller's cap; without one, only the safety
+ * ceiling in config.maxResponseTokens applies, and it truncates loudly.
  *
  * Descriptions are written for the model, not for a human reading docs. The
  * highest-value words are the ones naming what each tool REPLACES, because the
@@ -33,23 +33,28 @@
  */
 
 export function toolDefinitions({ embeddingsEnabled = false } = {}) {
-  const budget = { type: 'integer', description: 'Optional cap on response tokens. Uncapped by default.' };
+  const budget = { type: 'integer', description: 'Max response tokens (default 10000).' };
+
+  // Every tool only reads the index. Declaring it lets a client run the calls
+  // in parallel and skip the permission prompt; annotations are metadata for
+  // the client and are not part of what the model is charged for.
+  const annotations = { readOnlyHint: true };
 
   const tools = [
     {
       name: 'map',
       description:
-        'Two modes — pass `path` for one, `symbol` for the other; never both.\n' +
+        'Two modes — pass `path` or `symbol`, never both.\n' +
         '\n' +
         'OUTLINE (`path`): symbol hierarchy of a repo, directory, or file, with line ' +
         'numbers. Use instead of ls/glob, and instead of opening a file to see what is ' +
-        'in it — an outline is a fraction of the file\'s size and tells you which symbol ' +
-        'is worth reading in full.\n' +
+        'in it — an outline is a fraction of the file\'s size and shows which lines ' +
+        'are worth reading.\n' +
         '\n' +
         'RELATE (`symbol`): callers, callees, importers, blast-radius impact, or the call ' +
-        'path to another symbol. run it before ' +
-        'changing anything shared. Edges marked "!" are guessed from a name match, not ' +
-        'proven through an import; verify before relying on them.',
+        'path to another symbol. Run it before changing anything shared. Edges marked ' +
+        '"!" are guessed from a name match, not proven through an import; verify them.',
+      annotations,
       inputSchema: {
         type: 'object',
         properties: {
@@ -81,6 +86,7 @@ export function toolDefinitions({ embeddingsEnabled = false } = {}) {
         'Search symbols by name, signature, or doc text. Use instead of grep. ' +
         'Matches camelCase parts ("login" finds "handleLogin") and substrings, ranked ' +
         'by importance. Returns definitions with exact locations, not line hits.',
+      annotations,
       inputSchema: {
         type: 'object',
         properties: {
@@ -106,6 +112,7 @@ export function toolDefinitions({ embeddingsEnabled = false } = {}) {
       name: 'similar',
       description:
         'Find code by what it does rather than what it is called. Semantic search.',
+      annotations,
       inputSchema: {
         type: 'object',
         properties: { query: { type: 'string' }, limit: { type: 'integer' } },

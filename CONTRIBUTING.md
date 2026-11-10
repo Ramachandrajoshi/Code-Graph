@@ -41,6 +41,10 @@ That writes `.cgraph/packs/kotlin/` with a working `index.js` and commented
 query stubs. Packs there are discovered at the highest precedence, so you can
 iterate without installing anything.
 
+Run `cgraph trust` in that project once. A pack is JavaScript that runs when it
+loads, so packs inside a project are ignored until the project is trusted —
+without it your pack is skipped, with a warning on stderr saying so.
+
 ### 2. Write the tags query
 
 `queries/tags.scm` maps grammar nodes to graph nodes:
@@ -112,7 +116,8 @@ existing Go/Rust/Java ones. **A pack without fixtures will not be merged** —
 that's the only thing keeping 36 languages from silently rotting.
 
 You can also publish independently as `cgraph-pack-<lang>` on npm; anything
-matching that name in a project's `node_modules` is discovered automatically.
+matching that name in a project's `node_modules` is discovered automatically
+once the project is trusted (`cgraph trust`).
 
 ---
 

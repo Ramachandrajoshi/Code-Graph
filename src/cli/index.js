@@ -24,6 +24,7 @@ const COMMANDS = {
   watch: () => import('./commands/watch.js'),
   hooks: () => import('./commands/hooks.js'),
   skill: () => import('./commands/skill.js'),
+  trust: () => import('./commands/trust.js'),
 };
 
 const HELP = `
@@ -51,6 +52,7 @@ ${color.bold('DIAGNOSTICS')}
   stats                Index size and token savings to date
   doctor               Resolution quality, misconfiguration, staleness
   packs                List, add, or scaffold language packs
+  trust                Allow this project's own packs and embeddings to run
   serve                Run the MCP server on stdio
 
 ${color.bold('GLOBAL OPTIONS')}

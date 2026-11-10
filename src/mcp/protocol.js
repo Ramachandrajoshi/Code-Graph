@@ -25,10 +25,11 @@ export const ERRORS = {
 };
 
 export class StdioServer {
-  constructor({ name, version, handlers }) {
+  constructor({ name, version, handlers, instructions = null }) {
     this.name = name;
     this.version = version;
     this.handlers = handlers;
+    this.instructions = instructions;
     this.initialized = false;
   }
 
@@ -104,6 +105,7 @@ export class StdioServer {
           protocolVersion: version,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: this.name, version: this.version },
+          ...(this.instructions ? { instructions: this.instructions } : {}),
         };
       }
 

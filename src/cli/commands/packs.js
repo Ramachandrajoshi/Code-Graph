@@ -126,8 +126,9 @@ function scaffold(config, args) {
   out('');
   out('  next:');
   out(`    1. edit ${color.cyan('queries/tags.scm')} — node names must match the ${grammar} grammar`);
-  out(`    2. run ${color.cyan('cgraph index --force')} to apply it`);
-  out(`    3. run ${color.cyan('cgraph doctor')} to see the resolution quality it achieves`);
+  out(`    2. run ${color.cyan('cgraph trust')} — a pack is code; project packs load only once you allow it`);
+  out(`    3. run ${color.cyan('cgraph index --force')} to apply it`);
+  out(`    4. run ${color.cyan('cgraph doctor')} to see the resolution quality it achieves`);
   out('');
   out(color.dim('  tip: upstream tree-sitter grammar repos ship a queries/tags.scm'));
   out(color.dim('       that can usually be dropped in with minimal edits.'));
@@ -139,9 +140,9 @@ function where(config) {
   out(color.bold('pack discovery order') + color.dim('  (later overrides earlier)'));
   out('');
   out(`  1  builtin        ${color.dim('shipped with cgraph')}`);
-  out(`  2  ${path.join(config.root, 'node_modules', 'cgraph-pack-*')}`);
+  out(`  2  ${path.join(config.root, 'node_modules', 'cgraph-pack-*')}  ${color.dim('needs `cgraph trust`')}`);
   out(`  3  ${path.join(userCacheDir(), 'packs')}`);
-  out(`  4  ${path.join(config.dir, 'packs')}  ${color.dim('highest precedence')}`);
+  out(`  4  ${path.join(config.dir, 'packs')}  ${color.dim('highest precedence; needs `cgraph trust`')}`);
   out('');
 }
 

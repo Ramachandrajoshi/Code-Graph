@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import {
   AGENTS, AGENT_IDS, selectAgents, registerMcp, writeInstructions,
-  instructionFilesFor, instructionBlock, writeClaudeSettings,
+  instructionFilesFor, instructionBlock, writeClaudeSettings, launchCommand,
 } from '../src/agents.js';
 
 const require = createRequire(import.meta.url);
@@ -115,7 +115,7 @@ test('an unknown agent name fails with the known list', () => {
 test('Claude Code gets mcpServers with command and args', () => {
   const root = makeRepo();
   try {
-    registerMcp(root, 'claude');
+    registerMcp(root, 'claude', { launch: ['cgraph'] });
     const entry = readJson(root, '.mcp.json').mcpServers.cgraph;
     assert.equal(entry.command, 'cgraph');
     assert.deepEqual(entry.args.slice(0, 2), ['serve', '--root']);
@@ -137,7 +137,7 @@ test('opencode gets a command array and type: local', () => {
   // opencode takes one flat command array; command+args is silently ignored.
   const root = makeRepo({ 'opencode.json': '{}' });
   try {
-    registerMcp(root, 'opencode');
+    registerMcp(root, 'opencode', { launch: ['cgraph'] });
     const entry = readJson(root, 'opencode.json').mcp.cgraph;
     assert.equal(entry.type, 'local');
     assert.ok(Array.isArray(entry.command), 'command must be an array');
@@ -157,6 +157,74 @@ test('the server entry pins --root', () => {
     assert.ok(args.includes('--root'));
     assert.ok(args[args.indexOf('--root') + 1].length > 0);
   } finally { cleanup(root); }
+});
+
+// ---------------------------------------------------------------- launch command
+//
+// Every case here is a way the server used to fail with nothing but "connection
+// closed" in the agent: the entry named a bare `cgraph` the agent could not
+// start. None of them shows up in a test that only checks the JSON shape.
+
+test('without cgraph on PATH the entry launches node by absolute path', () => {
+  // Run from a checkout or through npx, there is no global `cgraph` for the
+  // agent to find. The entry must still start.
+  const launch = launchCommand({ onPath: false, execPath: '/usr/bin/node', binPath: '/opt/cgraph/bin/cgraph.js' });
+  assert.deepEqual(launch, ['/usr/bin/node', '/opt/cgraph/bin/cgraph.js']);
+
+  const root = makeRepo();
+  try {
+    registerMcp(root, 'claude', { launch });
+    const entry = readJson(root, '.mcp.json').mcpServers.cgraph;
+    assert.equal(entry.command, '/usr/bin/node');
+    assert.deepEqual(entry.args.slice(0, 3), ['/opt/cgraph/bin/cgraph.js', 'serve', '--root']);
+  } finally { cleanup(root); }
+});
+
+test('the default launch command points at a script that exists', () => {
+  // Whatever this machine resolves to, the fallback must name the real entry
+  // point — a path that drifted from bin/ would fail only in production.
+  const [, script] = launchCommand({ onPath: false });
+  assert.ok(fs.existsSync(script), `${script} should exist`);
+  assert.ok(!script.includes('\\'), 'forward slashes, so the JSON needs no escaping');
+});
+
+test('on Windows a PATH install goes through cmd /c', () => {
+  // The global command is a .cmd shim there, and a process spawned without a
+  // shell cannot execute one.
+  assert.deepEqual(launchCommand({ onPath: true, platform: 'win32' }), ['cmd', '/c', 'cgraph']);
+  assert.deepEqual(launchCommand({ onPath: true, platform: 'linux' }), ['cgraph']);
+});
+
+test('opencode gets the fallback as one flat array', () => {
+  const root = makeRepo({ 'opencode.json': '{}' });
+  try {
+    registerMcp(root, 'opencode', { launch: ['/usr/bin/node', '/opt/cgraph/bin/cgraph.js'] });
+    const entry = readJson(root, 'opencode.json').mcp.cgraph;
+    assert.deepEqual(entry.command.slice(0, 4), ['/usr/bin/node', '/opt/cgraph/bin/cgraph.js', 'serve', '--root']);
+  } finally { cleanup(root); }
+});
+
+test('a stock entry that cannot launch is repaired; a custom one is not', () => {
+  // The entry an older version wrote is ours to fix. Anything else is the
+  // user's, however broken it looks from here.
+  const launch = ['/usr/bin/node', '/opt/cgraph/bin/cgraph.js'];
+  const stock = makeRepo({
+    '.mcp.json': JSON.stringify({ mcpServers: { cgraph: { command: 'cgraph', args: ['serve', '--root', '/old'] } } }),
+  });
+  try {
+    assert.equal(registerMcp(stock, 'claude', { launch }).status, 'repaired');
+    assert.equal(readJson(stock, '.mcp.json').mcpServers.cgraph.command, '/usr/bin/node');
+    // Where `cgraph` does resolve, the same entry is fine and is left alone.
+    assert.equal(registerMcp(stock, 'claude', { launch: ['cgraph'] }).status, 'exists');
+  } finally { cleanup(stock); }
+
+  const custom = makeRepo({
+    '.mcp.json': JSON.stringify({ mcpServers: { cgraph: { command: 'cgraph', args: ['--verbose', 'serve'] } } }),
+  });
+  try {
+    assert.equal(registerMcp(custom, 'claude', { launch }).status, 'exists');
+    assert.deepEqual(readJson(custom, '.mcp.json').mcpServers.cgraph.args, ['--verbose', 'serve']);
+  } finally { cleanup(custom); }
 });
 
 // ---------------------------------------------------------------- safety
@@ -229,14 +297,28 @@ test('writeClaudeSettings pre-approves the MCP server and its tools', () => {
     const result = writeClaudeSettings(root);
     assert.equal(result.status, 'created');
     const json = readJson(root, '.claude/settings.json');
-    assert.equal(json.enableAllProjectMcpServers, true);
     assert.ok(json.enabledMcpjsonServers.includes('cgraph'));
-    for (const tool of ['status', 'map', 'find', 'read', 'graph']) {
+    for (const tool of ['map', 'find']) {
       assert.ok(
         json.permissions.allow.includes(`mcp__cgraph__${tool}`),
         `should pre-approve mcp__cgraph__${tool}`
       );
     }
+  } finally { cleanup(root); }
+});
+
+test('the pre-approval covers cgraph and nothing else', () => {
+  // This file is checked in. A blanket enableAllProjectMcpServers would approve,
+  // for every clone and with no prompt, any server a later commit adds to
+  // .mcp.json — which is a command line. And a permission for a tool the server
+  // does not expose is a grant waiting for something to claim it.
+  const root = makeRepo();
+  try {
+    writeClaudeSettings(root);
+    const json = readJson(root, '.claude/settings.json');
+    assert.equal(json.enableAllProjectMcpServers, undefined, 'must not approve servers it did not register');
+    assert.deepEqual(json.enabledMcpjsonServers, ['cgraph']);
+    assert.deepEqual(json.permissions.allow.sort(), ['mcp__cgraph__find', 'mcp__cgraph__map']);
   } finally { cleanup(root); }
 });
 
@@ -304,7 +386,7 @@ test('the instruction block stays small enough to sit in every session', async (
   // the same token discipline as tool output.
   const { estimate } = await import('../src/core/tokens.js');
   const tokens = estimate(instructionBlock());
-  assert.ok(tokens < 600, `instruction block costs ${tokens} tokens; budget is 600`);
+  assert.ok(tokens < 400, `instruction block costs ${tokens} tokens; budget is 400`);
 });
 
 test('instructions are created when the file is absent', () => {
@@ -382,7 +464,7 @@ test('init pre-approves Claude Code MCP permissions by default', opts, () => {
   try {
     init(root);
     const json = readJson(root, '.claude/settings.json');
-    assert.equal(json.enableAllProjectMcpServers, true);
+    assert.equal(json.enableAllProjectMcpServers, undefined);
     assert.ok(json.enabledMcpjsonServers.includes('cgraph'));
     assert.ok(json.permissions.allow.includes('mcp__cgraph__find'));
   } finally { cleanup(root); }

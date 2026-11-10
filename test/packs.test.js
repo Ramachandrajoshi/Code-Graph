@@ -420,7 +420,7 @@ test('a pack authored outside the repo is discovered and used', opts, async () =
       dir: path.join(fx.root, '.cgraph'),
       deps: { ...DEFAULTS.deps, offline: true },
     };
-    const registry = await PackRegistry.load(config);
+    const registry = await PackRegistry.load(config, { trusted: true });
     await new Indexer({ store: fx.store, config, registry }).run({ force: true });
     registry.dispose();
 
@@ -455,7 +455,7 @@ test('a broken third-party pack does not stop indexing', opts, async () => {
       ...DEFAULTS, root: fx.root,
       dir: path.join(fx.root, '.cgraph'),
       deps: { ...DEFAULTS.deps, offline: true },
-    });
+    }, { trusted: true });
     assert.ok(registry.packs.get('javascript'), 'builtin packs still load');
     registry.dispose();
   } finally { fx.cleanup(); }
@@ -613,7 +613,7 @@ test('a pack whose query file is missing is reported as a gap, not a crash', opt
     const { PackRegistry } = await import('../src/packs/registry.js');
     const { DEFAULTS } = await import('../src/core/config.js');
     const config = { ...DEFAULTS, root: fx.root, dir: path.join(fx.root, '.cgraph'), deps: { ...DEFAULTS.deps, offline: true } };
-    const registry = await PackRegistry.load(config);
+    const registry = await PackRegistry.load(config, { trusted: true });
     await new Indexer({ store: fx.store, config, registry }).run({ force: true });
 
     // The declared query could not be read, so toml has no tags -> a gap, and
@@ -649,7 +649,7 @@ test('a pack module with no default export object is skipped, not fatal', opts, 
     const registry = await PackRegistry.load({
       ...DEFAULTS, root: fx.root, dir: path.join(fx.root, '.cgraph'),
       deps: { ...DEFAULTS.deps, offline: true },
-    });
+    }, { trusted: true });
     assert.ok(registry.packs.get('javascript'), 'builtins survive a malformed external pack');
     assert.ok(!registry.packs.get('x'), 'the malformed module contributed no pack');
     registry.dispose();

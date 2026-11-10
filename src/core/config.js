@@ -98,6 +98,18 @@ export const DEFAULTS = {
   // Default token budget for a single tool response when the caller doesn't say.
   defaultBudget: 2000,
 
+  // Ceiling on a single MCP response when the caller passes no `budget`.
+  //
+  // Not a tuning knob for brevity — ordinary answers are a few hundred tokens
+  // and never get near it. It exists because the client has a ceiling of its
+  // own (Claude Code warns at 10k tokens of tool output and refuses past 25k),
+  // and hitting THAT one is the worst outcome available: the answer is cut or
+  // dropped by something that cannot say what is missing, after the tokens
+  // were already spent. Stopping here instead keeps the cut ours, so it is
+  // announced, counted, and comes with the way to narrow the question.
+  // An explicit `budget` always wins, in either direction. 0 disables it.
+  maxResponseTokens: 10000,
+
   // Keep the index current without anyone remembering to.
   //
   // The MCP server checks for changes before answering, so an agent never reads

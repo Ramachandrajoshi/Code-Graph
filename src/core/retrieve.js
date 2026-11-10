@@ -56,17 +56,46 @@ export function outlineFile(store, file, { budget = 0, kinds = null, maxDepth = 
   const lines = [];
   const header = `${file.path}  L${file.loc} ~${compactTokens(file.tok)}`;
 
+  // Fields that belong to a function rather than to a type: the literals in an
+  // options object passed inline (`mkdir(dir, { recursive: true })`), a result
+  // object being returned. They are indexed because a namespace object's
+  // members must resolve, but in an outline they are not structure — on a
+  // typical JavaScript file they are most of the lines and none of the answer
+  // to "what is in here". Hidden by default, counted in a footer so the
+  // omission is never silent, and shown the moment the caller asks for fields.
+  const showLocalFields = kinds?.includes('field') ?? false;
+  const localField = new Set();
+  const kindOf = new Map();
+  let hiddenFields = 0;
+
   for (const n of nodes) {
     if (n.kind === 'module') { depths.set(n.id, -1); continue; }
 
     const parentDepth = depths.get(n.parent_id) ?? -1;
     const depth = parentDepth + 1;
     depths.set(n.id, depth);
+    kindOf.set(n.id, n.kind);
+
+    if (n.kind === 'field') {
+      const parentKind = kindOf.get(n.parent_id);
+      const local = parentKind === 'function' || parentKind === 'method' || localField.has(n.parent_id);
+      if (local) {
+        localField.add(n.id);
+        if (!showLocalFields) {
+          if (depth <= maxDepth) hiddenFields++;
+          continue;
+        }
+      }
+    }
 
     if (depth > maxDepth) continue;
     if (kinds && !kinds.includes(n.kind)) continue;
 
     lines.push(...renderSymbol(n, depth, detail));
+  }
+
+  if (hiddenFields && !kinds) {
+    lines.push(`  (+${hiddenFields} object-literal fields inside functions; kinds ["field"] lists them)`);
   }
 
   if (!lines.length) {

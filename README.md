@@ -65,6 +65,28 @@ For air-gapped or offline environments, pre-install all grammars instead:
 npm install -g cgraph tree-sitter-wasms
 ```
 
+### Upgrading to 0.7
+
+```bash
+npm install -g cgraph@latest
+cd your-project
+cgraph init        # repairs an MCP entry that could not start; refreshes instructions
+```
+
+Three things changed that you may notice:
+
+- **Project packs and embeddings need `cgraph trust`.** If this project has
+  packs in `.cgraph/packs/` or `node_modules/cgraph-pack-*`, or enables
+  embeddings in `.cgraph/config.json`, run `cgraph trust` once. Until then they
+  are skipped, with a message saying so. See [Security](#security).
+- **`enableAllProjectMcpServers` is no longer written** to
+  `.claude/settings.json`. If an earlier `init` put `true` there and you did
+  not want every server in `.mcp.json` auto-approved, delete that line.
+- **Git hooks** installed by an earlier version should be rewritten:
+  `cgraph hooks uninstall && cgraph hooks install`.
+
+The full list is in the [CHANGELOG](CHANGELOG.md).
+
 ## Commands
 
 ```
@@ -101,6 +123,17 @@ src/core/tokens.js  L137 ~1.7k
 Both numbers are measured. The difference is left for you to interpret: whether
 you would otherwise have read the whole file is a fact about your workflow, not
 something cgraph can observe.
+
+An outline shows structure, so object literals written inside a function —
+`mkdir(dir, { recursive: true })`, a returned `{ status: 'ok' }` — are left out
+and counted in a footer instead:
+
+```
+  (+9 object-literal fields inside functions; kinds ["field"] lists them)
+```
+
+`cgraph map <file> --kind field` (or `kinds: ["field"]` over MCP) lists them.
+Members of classes and of module-level objects are always shown.
 
 ```console
 $ cgraph graph estimate --dir impact
@@ -148,10 +181,31 @@ Restart your agent afterwards to pick up the server.
 
 ### What gets written
 
-Existing entries are never overwritten, files that aren't valid JSON are left
-untouched, and re-running updates the instruction block in place rather than
-appending a second copy. Your own content in `CLAUDE.md` or `AGENTS.md` is
-preserved — the block lives between `<!-- cgraph:start -->` markers.
+| File | What | Notes |
+|---|---|---|
+| `.cgraph/` | index and config | added to `.gitignore` |
+| MCP config (table above) | one server entry named `cgraph` | launch command chosen to actually start — see below |
+| Instruction file (table above) | a short block between `<!-- cgraph:start -->` markers | your own content is preserved |
+| `.claude/settings.json` | approves the `cgraph` server and its `map` / `find` tools | Claude Code only; nothing else is approved |
+| `.claude/skills/cgraph/SKILL.md` | the Agent Skill | see below |
+
+A customised MCP entry is never overwritten, files that aren't valid JSON are
+left untouched, and re-running updates the instruction block in place rather
+than appending a second copy.
+
+**The launch command.** An agent starts the server itself, without a shell and
+with its own PATH. So `init` writes a bare `cgraph` only when that will
+resolve there; on Windows it goes through `cmd /c`, because the global command
+is a `.cmd` shim. When `cgraph` is not on PATH at all — you ran it from a
+checkout or through `npx` — it writes `node` plus the absolute path of the
+script. Re-running `init` repairs an entry written by a version before 0.7
+that could not start.
+
+**The Claude Code approval** exists because a subagent has nobody to click
+"allow": without it the tool call is denied and the agent quietly falls back to
+grep. It names `cgraph` specifically. It does not set
+`enableAllProjectMcpServers`, which in a checked-in file would approve any
+server a later commit adds to `.mcp.json`.
 
 ```bash
 cgraph init --no-instructions   # register MCP only
@@ -202,15 +256,23 @@ which is what `cgraph init` writes for you in that situation:
 unpredictable working directory, and without it the server resolves whichever
 index happens to be nearest.
 
-### Verifying the connection
+### Troubleshooting the connection
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Agent reports **"connection closed"** or "failed to connect" | The command in the MCP config cannot be started: `cgraph` is not on the agent's PATH, or on Windows it is a `.cmd` shim | Run `cgraph init` again (0.7+ repairs the entry), or use the absolute-path form above. Then restart the agent |
+| `cannot start: ...` on stderr | No index at `--root` | `cgraph init` in that directory |
+| Connects, but the agent never calls the tools | The instruction block is missing | Check `CLAUDE.md` / `AGENTS.md` for the `cgraph:start` block; re-run `cgraph init` |
+| Tools are denied in a subagent | Not pre-approved | Check `.claude/settings.json` lists `cgraph` under `enabledMcpjsonServers` |
+| A project pack does nothing, or `similar` is missing | The project is not trusted | `cgraph trust` — see [Security](#security) |
+
+To test the server by hand, run exactly what the config says:
 
 ```bash
-cgraph serve --root .    # should print "serving <path> (N symbols)" to stderr
-cgraph status            # index freshness and stats
+cgraph serve --root .    # prints "serving <path> (N symbols)" to stderr, then waits
+cgraph stats             # index size and freshness
+cgraph doctor            # resolution quality and coverage gaps
 ```
-
-If the agent connects but never uses the tools, check that the instruction file
-landed — that is usually the missing half.
 
 ## Keeping the index fresh
 
@@ -331,13 +393,8 @@ Packs are discovered from, in increasing precedence: builtins,
 `node_modules/cgraph-pack-*`, `~/.cgraph/packs/`, `.cgraph/packs/`.
 
 A pack is code, and loading one runs it. The two locations inside a project
-are therefore ignored until you run `cgraph trust` there, so that indexing a
-repository you just cloned can never execute something it committed. The same
-switch covers embeddings settings in `.cgraph/config.json`, which choose where
-code is sent and which environment variable goes with it as the key.
-`cgraph trust status` shows what trusting a project would enable; the decision
-lives in `~/.cgraph/trusted.json`, outside the project. In CI, set
-`CGRAPH_TRUST=1`.
+are ignored until you run `cgraph trust` there — after scaffolding a pack, that
+is the next step. See [Security](#security).
 
 Upstream tree-sitter grammars ship a `queries/tags.scm` using the same capture
 vocabulary, so they can usually be vendored with minimal edits.
@@ -360,19 +417,94 @@ Both remain available from the shell — `cgraph read`, `cgraph stats`. Dependen
 API documentation is likewise out of scope — pair cgraph with a docs-focused MCP
 server such as [Context7](https://github.com/upstash/context7) for that.
 
-Responses are not truncated by default. Every tool accepts an optional
-`budget` to cap output when you deliberately want a shorter answer, but no
-default is applied on your behalf.
+`similar` (semantic search) is registered only when embeddings are configured
+and the project is trusted, so its schema costs nothing otherwise.
 
-`similar` (semantic search) is registered only when embeddings are configured,
-so its schema costs nothing otherwise.
+### What is done to keep token cost down
+
+| Where the tokens go | What cgraph does |
+|---|---|
+| Tool schemas, every turn | Two tools, and a test that fails if their schemas grow past a budget |
+| Server instructions, every session | Three sentences. Clients that defer tool schemas keep these in context instead and use them to decide when to load the tools |
+| The instruction block in `CLAUDE.md` / `AGENTS.md`, every session | About 350 tokens, also under a test budget |
+| Each answer | Compact text, not JSON. Locations and signatures, not bodies. Outlines omit object literals inside functions |
+| Oversized answers | Stopped at 10,000 tokens, see below |
+| Permission prompts and serial calls | Every tool is marked read-only, so a client can run calls in parallel and without asking |
+| Repeated context | Output order is deterministic, so identical questions give byte-identical answers |
+
+**Response size.** Answers are not shortened for brevity: an agent that gets a
+partial answer without asking for one treats it as complete and stops looking.
+There is one limit. With no `budget`, a response stops at **10,000 tokens** —
+ordinary answers are a few hundred — because past that the *client* cuts or
+drops the result, after the tokens are spent and without saying what was lost.
+When cgraph stops, it says so and counts what it left out:
+
+```
+  ... 1840 more symbols (raise --budget to see them)
+```
+
+Pass `budget` to choose your own limit, higher or lower. To change the default:
+
+```jsonc
+// .cgraph/config.json
+{ "maxResponseTokens": 10000 }   // 0 turns it off
+```
+
+## Security
+
+cgraph is started by an agent, on whatever repository the agent was pointed at,
+with your credentials in its environment. The repository is therefore treated
+as untrusted input. Indexing only reads files — with two exceptions a project
+can carry, and both are off until you allow them:
+
+| In the project | What it can do | Until trusted |
+|---|---|---|
+| `.cgraph/packs/*`, `node_modules/cgraph-pack-*` | JavaScript, executed when the pack loads | not loaded; named in a warning |
+| `embeddings` in `.cgraph/config.json` | chooses the URL code is sent to, and the environment variable sent as its key | refused; `similar` is not offered |
+
+```bash
+cgraph trust status     # is this project trusted, and what would that enable
+cgraph trust            # allow it
+cgraph trust revoke     # stop
+```
+
+```console
+$ cgraph trust status
+  not trusted  /home/me/some-clone
+
+    runs code   .cgraph/packs/kotlin
+    sends code  to http://localhost:11434/v1 (local)
+    sends key   from $CGRAPH_EMBEDDING_API_KEY
+```
+
+The decision is stored in `~/.cgraph/trusted.json`, outside the project, so a
+repository cannot grant it to itself — there is no config-file key for it.
+Builtin packs and packs in `~/.cgraph/packs/` are yours and always load. In CI
+or a container, where the checkout is all there is, set `CGRAPH_TRUST=1`.
+
+Also by design:
+
+- **Grammars** are WebAssembly fetched from a CDN, and are verified against a
+  pinned SHA-256 before they are loaded.
+- **No shell.** Nothing in cgraph passes repository content to a shell. The
+  optional git hook quotes the project path.
+- **Paths from the index** cannot resolve outside the project root.
+- **API keys** are read from the environment and never written to config.
+- **Symlinks** are not followed during indexing.
+
+Tool output contains text from the repository — symbol names, signatures, and
+doc comments with `detail: "full"`. Like any file an agent reads, treat it as
+data. Report vulnerabilities privately through the repository's
+[Security tab](https://github.com/Ramachandrajoshi/Code-Graph/security) rather than a public issue.
 
 ## Optional extras
 
 Both are opt-in and off by default.
 
 **Embeddings** — for "find the code that does X" when you don't know what X is
-called. Structural search is always tried first.
+called. Structural search is always tried first. Because these settings decide
+where code is sent, they take effect only after `cgraph trust`
+([Security](#security)).
 
 Point it at a **local, OpenAI-compatible endpoint** — Ollama, LM Studio,
 llama.cpp's server, vLLM, text-embeddings-inference — and nothing leaves your
@@ -480,7 +612,7 @@ changes to core and is documented step by step in
 git clone https://github.com/Ramachandrajoshi/Code-Graph.git
 cd Code-Graph
 npm install
-npm test          # 231 tests
+npm test          # 531 tests
 npm run bench     # response sizes (regression guard)
 ```
 
